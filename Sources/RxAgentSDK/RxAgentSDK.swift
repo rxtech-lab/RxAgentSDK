@@ -1,5 +1,6 @@
 @_exported import RxAgentCore
 @_exported import RxAgentContext
+@_exported import RxAgentLLM
 @_exported import RxAgentSessions
 
 #if os(macOS)

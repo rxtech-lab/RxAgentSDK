@@ -48,10 +48,51 @@ public final class Agent {
     public var model: String?
     public var effort: String?
 
+    /// When non-nil, the only tool names any client may call this thread.
+    /// See ``AgentSendRequest/allowedTools``.
+    public var allowedTools: [String]?
+    /// Tool names withheld unconditionally.
+    public var disallowedTools: [String] = []
+    /// Tool-call rounds an in-process client may run in one turn.
+    public var maxToolIterations: Int = 20
+
+    /// Thread-scoped values every tool invocation can read.
+    @ObservationIgnored public var state = AgentStateValues()
+
     /// Prepend a summary of the transcript when a turn runs on a client that has
     /// not seen this thread before. Without it, switching providers mid-thread
     /// gives the new agent a prompt with no history at all.
     public var sendsHandoffSummary: Bool = true
+
+    /// When to fold older turns into the thread's rolling summary.
+    ///
+    /// Only in-process clients replay history, so only they feel this — a CLI
+    /// client resuming its own native session keeps a transcript we do not own,
+    /// and compacting ours would simply desync the two. ``compactIfNeeded()``
+    /// therefore skips a thread the active client is resuming.
+    public var autoCompact: AutoCompact?
+
+    public struct AutoCompact: Sendable, Equatable {
+        /// Compact once the replayable transcript exceeds this many messages.
+        public var afterMessages: Int
+        /// Messages left verbatim after a compaction.
+        public var keepingLast: Int
+
+        public init(afterMessages: Int = 20, keepingLast: Int = 6) {
+            self.afterMessages = afterMessages
+            self.keepingLast = keepingLast
+        }
+    }
+
+    /// Produces the rolling summary. Given the existing summary and the
+    /// transcript being folded in, returns the replacement.
+    ///
+    /// Injected because summarizing is a model call and `Agent` should not
+    /// assume which model — a thread running on a CLI still wants its history
+    /// compressed by something cheaper than spawning a subprocess. Returning
+    /// `nil` (or leaving this unset) falls back to truncation.
+    @ObservationIgnored
+    public var summarizer: (@Sendable (_ existing: String, _ transcript: String) async -> String?)?
 
     /// Called for every event, after the thread has folded it in.
     ///
@@ -134,18 +175,79 @@ public final class Agent {
 
     // MARK: Sending
 
+    /// Turns typed while one was streaming, sent in order once it finishes.
+    ///
+    /// Dropping a message the user has already typed and sent is never the right
+    /// answer, and blocking the field while the agent works makes the wait feel
+    /// longer than it is. So a send during a turn queues.
+    public private(set) var queuedTurns: [QueuedTurn] = []
+
+    public struct QueuedTurn: Sendable, Identifiable, Equatable {
+        public let id: UUID
+        public var text: String
+        public var attachments: [AgentAttachment]
+
+        public init(id: UUID = UUID(), text: String, attachments: [AgentAttachment] = []) {
+            self.id = id
+            self.text = text
+            self.attachments = attachments
+        }
+    }
+
+    public func removeQueuedTurn(id: UUID) {
+        queuedTurns.removeAll { $0.id == id }
+    }
+
+    /// Collapses every queued turn into one. Useful when a user typed three
+    /// clarifications in a row and wants them answered together rather than
+    /// as three separate turns.
+    public func mergeQueuedTurns() {
+        guard queuedTurns.count > 1 else { return }
+        let merged = QueuedTurn(
+            text: queuedTurns.map(\.text).joined(separator: "\n\n"),
+            attachments: queuedTurns.flatMap(\.attachments)
+        )
+        queuedTurns = [merged]
+    }
+
+    public func clearQueuedTurns() {
+        queuedTurns.removeAll()
+    }
+
+    /// Starts the next queued turn, if the thread is free and one is waiting.
+    private func drainQueue() {
+        guard !phase.isBusy, lastError == nil, !queuedTurns.isEmpty else { return }
+        let next = queuedTurns.removeFirst()
+        send(next.text, attachments: next.attachments)
+    }
+
     public func send(_ text: String, attachments: [AgentAttachment] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !phase.isBusy else { return }
+        guard !trimmed.isEmpty else { return }
+        guard !phase.isBusy else {
+            queuedTurns.append(QueuedTurn(text: trimmed, attachments: attachments))
+            return
+        }
 
         let client = activeClient
         let turnID = UUID()
         currentTurnID = turnID
         lastError = nil
         phase = .streaming(turnID: turnID)
+
+        // History is captured *before* the new turn joins the transcript: an
+        // in-process client replays `history` and then sends `prompt`, so a
+        // prompt that appears in both would reach the model twice.
+        let history = thread.replayableHistory()
         thread.appendUserMessage(trimmed, attachments: attachments)
 
-        let request = buildRequest(turnID: turnID, prompt: trimmed, attachments: attachments, client: client)
+        let request = buildRequest(
+            turnID: turnID,
+            prompt: trimmed,
+            attachments: attachments,
+            client: client,
+            history: history
+        )
 
         currentTurn = Task { [weak self] in
             for await event in client.send(request) {
@@ -158,10 +260,35 @@ public final class Agent {
             }
             self.currentTurn = nil
             self.currentTurnID = nil
+            await self.compactIfNeeded()
+            self.drainQueue()
+        }
+    }
+
+    // MARK: Compaction
+
+    /// Folds older turns into ``AgentThread/summary`` if ``autoCompact`` says so.
+    public func compactIfNeeded() async {
+        guard let policy = autoCompact else { return }
+        // The active client holds its own history server-side; ours is not what
+        // it replays, so shrinking ours buys nothing and desyncs the two.
+        guard !thread.hasRun(client: activeClientID) else { return }
+        guard thread.replayableHistory().count > policy.afterMessages else { return }
+        await compact(keepingLast: policy.keepingLast)
+    }
+
+    /// Compacts now, using ``summarizer`` when one is set.
+    public func compact(keepingLast keep: Int = 6) async {
+        let summarize = summarizer
+        await thread.compact(keepingLast: keep) { existing, transcript in
+            await summarize?(existing, transcript)
         }
     }
 
     public func stop() {
+        // Stop means stop: a queue drained after a cancel would restart the very
+        // work the user just interrupted.
+        queuedTurns.removeAll()
         guard let turnID = currentTurnID else { return }
         let client = activeClient
         currentTurn?.cancel()
@@ -200,7 +327,8 @@ public final class Agent {
         turnID: UUID,
         prompt: String,
         attachments: [AgentAttachment],
-        client: any AgentClient
+        client: any AgentClient,
+        history: [AgentMessage]
     ) -> AgentSendRequest {
         AgentSendRequest(
             turnID: turnID,
@@ -216,7 +344,17 @@ public final class Agent {
             contextText: renderContextText(for: client),
             toolServer: toolServer,
             mcpServers: mcpServers,
-            permissions: permissions
+            permissions: permissions,
+            localTools: effectiveTools,
+            toolContext: AgentToolContext(
+                threadID: thread.id,
+                workingDirectory: workingDirectory,
+                state: state
+            ),
+            history: history,
+            allowedTools: allowedTools,
+            disallowedTools: disallowedTools,
+            maxToolIterations: maxToolIterations
         )
     }
 
@@ -231,6 +369,15 @@ public final class Agent {
         var parts: [String] = []
         let declared = combined.renderText()
         if !declared.isEmpty { parts.append(declared) }
+
+        // Compacted turns are gone from `history`, so without this the model
+        // simply loses everything that happened before the compaction point.
+        if !thread.summary.isEmpty {
+            parts.append("""
+            ## Earlier in this conversation
+            \(thread.summary)
+            """)
+        }
 
         if sendsHandoffSummary, needsHandoffSummary(for: client) {
             let summary = thread.handoffSummary()

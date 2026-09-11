@@ -242,3 +242,69 @@ struct ClaudeWireDecoderTests {
     }
 }
 #endif
+
+// MARK: - Tool scoping
+
+#if os(macOS)
+@Suite("Claude tool scoping arguments")
+struct ClaudeToolScopingTests {
+
+    private func request(
+        allowed: [String]? = nil,
+        disallowed: [String] = []
+    ) -> AgentSendRequest {
+        AgentSendRequest(
+            threadID: AgentThreadID(),
+            prompt: "x",
+            workingDirectory: URL(filePath: "/tmp"),
+            mcpServers: [.http(name: "film_workflow", url: URL(string: "http://127.0.0.1:1/mcp")!)],
+            allowedTools: allowed,
+            disallowedTools: disallowed
+        )
+    }
+
+    @Test("With no turn allowlist the client's pre-approved set is used")
+    func fallsBackToPreapproved() {
+        let argument = ClaudeCodeClient.allowedToolArgument(
+            for: request(),
+            preapproved: ["Read", "Grep"]
+        )
+        #expect(argument == ["Read", "Grep"])
+    }
+
+    /// An allowlist means the host enumerated its whole surface. Re-adding
+    /// `Read`/`Bash` underneath it would defeat the point for an app whose agent
+    /// has no business touching the filesystem.
+    @Test("A turn allowlist replaces the pre-approved set rather than extending it")
+    func allowlistReplacesPreapproved() {
+        let argument = ClaudeCodeClient.allowedToolArgument(
+            for: request(allowed: ["caption_export"]),
+            preapproved: ["Read", "Bash"]
+        )
+        #expect(!argument.contains("Read"))
+        #expect(!argument.contains("Bash"))
+        #expect(argument.contains("caption_export"))
+        #expect(argument.contains("mcp__film_workflow__caption_export"))
+    }
+
+    @Test("A denied tool never reaches the allowlist")
+    func denyBeatsAllow() {
+        let argument = ClaudeCodeClient.allowedToolArgument(
+            for: request(allowed: ["caption_export", "delete_project"],
+                         disallowed: ["delete_project"]),
+            preapproved: []
+        )
+        #expect(argument.contains("caption_export"))
+        #expect(!argument.contains("delete_project"))
+    }
+
+    @Test("Denied tools are expanded into every namespaced spelling")
+    func denylistExpansion() {
+        let argument = ClaudeCodeClient.disallowedToolArgument(
+            for: request(disallowed: ["delete_project"])
+        )
+        #expect(argument.contains("delete_project"))
+        #expect(argument.contains("mcp__film_workflow__delete_project"))
+    }
+}
+#endif

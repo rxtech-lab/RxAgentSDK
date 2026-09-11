@@ -22,6 +22,10 @@ let package = Package(
 
         .target(name: "RxAgentContext", dependencies: ["RxAgentCore"]),
 
+        // MARK: - In-process model clients. All platforms — these spawn nothing.
+
+        .target(name: "RxAgentLLM", dependencies: ["RxAgentCore"]),
+
         // MARK: - macOS-only machinery. Contents are `#if os(macOS)`; empty module elsewhere.
 
         .target(name: "RxAgentProcess", dependencies: ["RxAgentCore"]),
@@ -66,6 +70,7 @@ let package = Package(
             dependencies: [
                 "RxAgentCore",
                 "RxAgentContext",
+                "RxAgentLLM",
                 "RxAgentProcess",
                 "RxAgentBridge",
                 "RxAgentClients",
@@ -80,6 +85,7 @@ let package = Package(
 
         .testTarget(name: "RxAgentCoreTests", dependencies: ["RxAgentCore"]),
         .testTarget(name: "RxAgentContextTests", dependencies: ["RxAgentContext"]),
+        .testTarget(name: "RxAgentLLMTests", dependencies: ["RxAgentLLM"]),
         .testTarget(name: "RxAgentProcessTests", dependencies: ["RxAgentProcess"]),
         .testTarget(name: "RxAgentBridgeTests", dependencies: ["RxAgentBridge"]),
         .testTarget(name: "RxAgentSessionsTests", dependencies: ["RxAgentSessions"]),

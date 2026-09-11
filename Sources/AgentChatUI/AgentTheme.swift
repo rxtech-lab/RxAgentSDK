@@ -16,10 +16,21 @@ public struct AgentTheme: Sendable {
     public var accent: Color
     public var danger: Color
     public var background: Color
+    /// Ground behind the transcript itself.
+    ///
+    /// Separate from ``background`` and **clear by default**: the list already
+    /// sits on top of that one, so painting it again buys nothing and costs a
+    /// host the ability to put a material, an image, or the window's own
+    /// vibrancy behind the conversation. Set it only when the transcript wants
+    /// a different ground from the rest of the surface.
+    public var listBackground: Color
     public var monoFont: Font
     public var markdown: MarkdownStyle
     public var cornerRadius: CGFloat
     public var rowPadding: EdgeInsets
+    /// How tall the composer's field is: it rests at the lower bound and grows
+    /// with the draft to the upper bound, then scrolls.
+    public var composerLines: ClosedRange<Int>
 
     public init(
         userBubble: Color,
@@ -34,7 +45,9 @@ public struct AgentTheme: Sendable {
         monoFont: Font,
         markdown: MarkdownStyle,
         cornerRadius: CGFloat,
-        rowPadding: EdgeInsets
+        rowPadding: EdgeInsets,
+        listBackground: Color = .clear,
+        composerLines: ClosedRange<Int> = 5 ... 12
     ) {
         self.userBubble = userBubble
         self.userText = userText
@@ -49,6 +62,8 @@ public struct AgentTheme: Sendable {
         self.markdown = markdown
         self.cornerRadius = cornerRadius
         self.rowPadding = rowPadding
+        self.listBackground = listBackground
+        self.composerLines = composerLines
     }
 
     public static let standard: AgentTheme = {
@@ -88,5 +103,15 @@ extension EnvironmentValues {
 public extension View {
     func agentTheme(_ theme: AgentTheme) -> some View {
         environment(\.agentTheme, theme)
+    }
+}
+
+
+// MARK: - Range clamping
+
+extension ClosedRange where Bound == Int {
+    /// `value`, brought inside the range.
+    func clamping(_ value: Int) -> Int {
+        Swift.min(Swift.max(value, lowerBound), upperBound)
     }
 }

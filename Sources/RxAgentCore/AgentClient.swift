@@ -98,6 +98,44 @@ public struct AgentSendRequest: Sendable {
     public let mcpServers: [MCPServerSpec]
     public let permissions: any PermissionResolving
 
+    /// The host's Swift tools, invocable without any transport.
+    ///
+    /// The same tools `toolServer` publishes over MCP — a CLI client reaches
+    /// them through that socket because it is a different process, while an
+    /// in-process client calls these closures. Both lists are present on every
+    /// request and each client uses the one it can.
+    public let localTools: [AnyAgentTool]
+
+    /// Where a local tool should consider itself to be running.
+    public let toolContext: AgentToolContext
+
+    /// The transcript preceding `prompt`, excluding the prompt itself.
+    ///
+    /// A CLI client ignores this — the agent process keeps its own history and
+    /// resumes it by `resumeSessionID`. An **in-process** client has no such
+    /// server-side session, so replaying the conversation is the only way it can
+    /// have one; this is where it gets the turns to replay. Already filtered by
+    /// `Agent` to drop anything the thread has compacted away, so a client can
+    /// send the whole array without reasoning about budgets.
+    public let history: [AgentMessage]
+
+    /// When non-nil, the *only* tool names this turn may call. `nil` means no
+    /// allowlist — every tool the agent discovers is fair game.
+    ///
+    /// Separate from `permissions` because the two answer different questions:
+    /// the resolver decides whether a call the agent *made* goes through, this
+    /// decides whether the agent is told the tool exists at all. A host whose
+    /// entire tool surface is its own MCP server wants the latter — there is no
+    /// sensible approval UI for `Bash` in an app that never runs shells.
+    public let allowedTools: [String]?
+
+    /// Tool names withheld unconditionally, applied after `allowedTools`.
+    public let disallowedTools: [String]
+
+    /// How many rounds of tool calls an in-process client may run before giving
+    /// up. Ignored by CLI clients, which manage their own loop.
+    public let maxToolIterations: Int
+
     public init(
         turnID: UUID = UUID(),
         threadID: AgentThreadID,
@@ -112,7 +150,13 @@ public struct AgentSendRequest: Sendable {
         contextText: String = "",
         toolServer: LocalToolServerHandle? = nil,
         mcpServers: [MCPServerSpec] = [],
-        permissions: any PermissionResolving = DenyAllPermissions()
+        permissions: any PermissionResolving = DenyAllPermissions(),
+        localTools: [AnyAgentTool] = [],
+        toolContext: AgentToolContext? = nil,
+        history: [AgentMessage] = [],
+        allowedTools: [String]? = nil,
+        disallowedTools: [String] = [],
+        maxToolIterations: Int = 20
     ) {
         self.turnID = turnID
         self.threadID = threadID
@@ -128,6 +172,35 @@ public struct AgentSendRequest: Sendable {
         self.toolServer = toolServer
         self.mcpServers = mcpServers
         self.permissions = permissions
+        self.localTools = localTools
+        self.toolContext = toolContext ?? AgentToolContext(
+            threadID: threadID,
+            workingDirectory: workingDirectory
+        )
+        self.history = history
+        self.allowedTools = allowedTools
+        self.disallowedTools = disallowedTools
+        self.maxToolIterations = maxToolIterations
+    }
+
+    /// Whether `name` survives this turn's allowlist and denylist.
+    ///
+    /// Matching is namespace-insensitive: a host declares `caption_export` once
+    /// and it holds whether the caller says `caption_export` (in-process) or
+    /// `mcp__film_workflow__caption_export` (a CLI agent). See ``MCPToolName``.
+    public func permitsTool(named name: String) -> Bool {
+        let bare = MCPToolName.bare(name)
+        if disallowedTools.contains(where: { MCPToolName.bare($0) == bare }) { return false }
+        guard let allowedTools else { return true }
+        return allowedTools.contains { MCPToolName.bare($0) == bare }
+    }
+
+    /// The names of every MCP server this turn can reach, for expanding a bare
+    /// tool name into the namespaced form a CLI agent will use.
+    public var mcpServerNames: [String] {
+        var names = mcpServers.filter(\.enabled).map(\.name)
+        if let toolServer { names.append(toolServer.name) }
+        return names
     }
 }
 

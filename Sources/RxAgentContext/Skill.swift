@@ -93,26 +93,3 @@ public enum SkillsBuilder {
     public static func buildEither(second skills: [Skill]) -> [Skill] { skills }
     public static func buildArray(_ skills: [[Skill]]) -> [Skill] { skills.flatMap(\.self) }
 }
-
-// MARK: - Session state
-
-/// Key for a value shared across a thread's tools and context.
-///
-/// This is the stand-in for FoundationModels 27's `@SessionProperty` /
-/// `SessionPropertyValues`, which don't exist on 26.
-public protocol AgentStateKey: Sendable {
-    associatedtype Value: Sendable
-    static var defaultValue: Value { get }
-}
-
-/// Thread-scoped shared state, readable and writable from tools.
-public struct AgentStateValues: Sendable {
-    private var storage: [ObjectIdentifier: any Sendable] = [:]
-
-    public init() {}
-
-    public subscript<K: AgentStateKey>(key: K.Type) -> K.Value {
-        get { storage[ObjectIdentifier(key)] as? K.Value ?? K.defaultValue }
-        set { storage[ObjectIdentifier(key)] = newValue }
-    }
-}
