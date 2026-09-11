@@ -454,6 +454,59 @@ struct MCPConfigRendererTests {
         #expect(overrides[3].hasPrefix("mcp_servers.rxagent-tools={ url = "))
     }
 
+    /// Codex owns the `Authorization` header for HTTP MCP servers and takes its
+    /// value from a named environment variable. Rendering it as a plain header
+    /// silently fails to authenticate, so the renderer has to split it out — and
+    /// hand back the environment that the override now depends on.
+    @Test("An HTTP server's bearer token is routed through an environment variable")
+    func codexBearerToken() {
+        let authenticated = MCPServerSpec.http(
+            name: "film_workflow",
+            url: URL(string: "http://127.0.0.1:8765/mcp")!,
+            headers: [
+                "Authorization": "Bearer s3cret",
+                "X-RxFilm-Document": "DOC-1",
+            ]
+        )
+
+        let configuration = MCPConfigRenderer.codexConfiguration(
+            servers: [authenticated],
+            toolServer: nil
+        )
+        let table = configuration.overrides[1]
+        let key = MCPConfigRenderer.codexTokenEnvironmentKey(for: "film_workflow")
+
+        #expect(table.contains("bearer_token_env_var = \"\(key)\""))
+        #expect(configuration.environment[key] == "s3cret")
+        // The token must not also appear inline — `-c` values show up in `ps`.
+        #expect(!table.contains("s3cret"))
+
+        // Every other header still travels as a header. `X-RxFilm-Document` is
+        // a legal TOML bare key, so it renders unquoted; a header name that
+        // isn't gets quoted by `tomlKey`.
+        #expect(table.contains("http_headers = { X-RxFilm-Document = \"DOC-1\" }"))
+        #expect(!table.contains("Authorization"))
+    }
+
+    @Test("An HTTP server with no headers renders just a url")
+    func codexHTTPWithoutHeaders() {
+        let configuration = MCPConfigRenderer.codexConfiguration(
+            servers: [httpServer],
+            toolServer: nil
+        )
+        #expect(configuration.overrides[1] == #"mcp_servers.remote={ url = "https://example.com/mcp" }"#)
+        #expect(configuration.environment.isEmpty)
+    }
+
+    @Test("Token environment keys are legal identifiers and namespaced per server")
+    func codexTokenKeys() {
+        #expect(MCPConfigRenderer.codexTokenEnvironmentKey(for: "film_workflow")
+            == "RXAGENT_MCP_TOKEN_FILM_WORKFLOW")
+        // A hyphen is legal in a server name but not in a shell variable.
+        #expect(MCPConfigRenderer.codexTokenEnvironmentKey(for: "rxagent-tools")
+            == "RXAGENT_MCP_TOKEN_RXAGENT_TOOLS")
+    }
+
     @Test("TOML strings and keys are escaped")
     func tomlEscaping() {
         #expect(MCPConfigRenderer.tomlString(#"a"b\c"#) == #""a\"b\\c""#)

@@ -109,19 +109,62 @@ struct AgentTests {
         #expect(agent.phase == .idle)
     }
 
-    @Test("A second send while streaming is ignored")
-    func ignoresConcurrentSend() async {
+    @Test("A second send while streaming is queued, then sent in order")
+    func queuesConcurrentSend() async {
         let agent = Agent(
             clients: [PreviewAgentClient(script: .longMarkdown, deltaInterval: .milliseconds(5))],
             workingDirectory: URL(filePath: "/tmp")
         )
         agent.send("first")
         agent.send("second")
+
+        // The second turn has not started, but it has not been thrown away
+        // either — dropping a message the user already sent is never right.
+        #expect(agent.queuedTurns.count == 1)
+        #expect(agent.thread.messages.filter { $0.role == .user }.count == 1)
+
         await waitUntilIdle(agent, timeout: .seconds(20))
 
         let userMessages = agent.thread.messages.filter { $0.role == .user }
-        #expect(userMessages.count == 1)
+        #expect(userMessages.count == 2)
         #expect(userMessages[0].plainText == "first")
+        #expect(userMessages[1].plainText == "second")
+        #expect(agent.queuedTurns.isEmpty)
+    }
+
+    @Test("Stopping discards the queue rather than draining it")
+    func stopClearsQueue() async {
+        let agent = Agent(
+            clients: [PreviewAgentClient(script: .longMarkdown, deltaInterval: .milliseconds(5))],
+            workingDirectory: URL(filePath: "/tmp")
+        )
+        agent.send("first")
+        agent.send("second")
+        #expect(agent.queuedTurns.count == 1)
+
+        agent.stop()
+        await waitUntilIdle(agent, timeout: .seconds(20))
+
+        #expect(agent.queuedTurns.isEmpty)
+        #expect(agent.thread.messages.filter { $0.role == .user }.count == 1)
+    }
+
+    @Test("Queued turns can be merged into one")
+    func mergesQueuedTurns() async {
+        let agent = Agent(
+            clients: [PreviewAgentClient(script: .longMarkdown, deltaInterval: .milliseconds(5))],
+            workingDirectory: URL(filePath: "/tmp")
+        )
+        agent.send("first")
+        agent.send("second")
+        agent.send("third")
+        #expect(agent.queuedTurns.count == 2)
+
+        agent.mergeQueuedTurns()
+        #expect(agent.queuedTurns.count == 1)
+        #expect(agent.queuedTurns[0].text == "second\n\nthird")
+
+        agent.stop()
     }
 
     @Test("newThread clears the transcript and session ids")

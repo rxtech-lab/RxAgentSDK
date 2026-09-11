@@ -29,6 +29,16 @@ public final class AgentThread: Identifiable {
     public var title: String?
     public let createdAt: Date
 
+    /// Rolling digest of turns that have been compacted away.
+    ///
+    /// Compacted messages stay in ``messages`` — the user's scrollback is not
+    /// the model's context window, and silently deleting rows to save tokens is
+    /// the wrong trade. Only ``replayableHistory()`` shrinks.
+    public private(set) var summary: String = ""
+
+    /// Messages folded into ``summary`` and therefore no longer replayed.
+    public private(set) var compactedMessageIDs: Set<UUID> = []
+
     @ObservationIgnored private var reducer = TranscriptReducer()
 
     public init(id: AgentThreadID = AgentThreadID(), createdAt: Date = Date()) {
@@ -77,16 +87,98 @@ public final class AgentThread: Identifiable {
 
     public func clear() {
         _ = reducer.reset()
+        // Native session ids go too: a client that resumed its own session
+        // after a clear would bring back exactly what the user just deleted.
         nativeSessionIDs.removeAll()
         lastClientID = nil
+        summary = ""
+        compactedMessageIDs.removeAll()
         syncFromReducer()
     }
 
     /// Seed a thread from persisted history (e.g. a resumed CLI session).
-    public func load(messages: [AgentMessage], nativeSessionIDs: [AgentClientID: String] = [:]) {
+    public func load(
+        messages: [AgentMessage],
+        nativeSessionIDs: [AgentClientID: String] = [:],
+        summary: String = "",
+        compactedMessageIDs: Set<UUID> = []
+    ) {
         reducer = TranscriptReducer(messages: messages)
         self.nativeSessionIDs = nativeSessionIDs
+        self.summary = summary
+        self.compactedMessageIDs = compactedMessageIDs
         syncFromReducer()
+    }
+
+    // MARK: - Compaction
+
+    /// The turns an in-process client should replay: everything not yet folded
+    /// into ``summary``.
+    ///
+    /// The summary itself is *not* prepended here — it belongs in the system
+    /// context, which is where ``Agent`` puts it, so that a client replaying
+    /// this array gets a clean alternating user/assistant sequence with no
+    /// synthetic turn wedged into it.
+    public func replayableHistory() -> [AgentMessage] {
+        guard !compactedMessageIDs.isEmpty else { return messages }
+        return messages.filter { !compactedMessageIDs.contains($0.id) }
+    }
+
+    /// Folds all but the last `keepingLast` replayable turns into `summary`.
+    ///
+    /// `summarize` is injected rather than performed here because summarizing is
+    /// a model call and this type owns no client. Pass the digest of the given
+    /// transcript; return `nil` to fall back to truncation, which is lossy but
+    /// bounded — and bounded is the whole point of compacting.
+    @discardableResult
+    public func compact(
+        keepingLast keep: Int = 6,
+        maxSummaryCharacters: Int = 2000,
+        summarize: (String, String) async -> String?
+    ) async -> Bool {
+        let replayable = replayableHistory()
+        guard replayable.count > keep else { return false }
+
+        let folded = replayable.prefix(replayable.count - keep)
+        let transcript = folded.map { message in
+            let role = message.role == .user ? "User" : "Assistant"
+            var line = "\(role): \(message.plainText)"
+            let tools = message.toolCalls.map(\.name)
+            if !tools.isEmpty { line += "\n(tools: \(tools.joined(separator: ", ")))" }
+            return line
+        }
+        .joined(separator: "\n\n")
+
+        if let digest = await summarize(summary, transcript),
+           !digest.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            summary = digest.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            summary = String((summary + "\n" + transcript).suffix(maxSummaryCharacters))
+        }
+
+        compactedMessageIDs.formUnion(folded.map(\.id))
+        return true
+    }
+
+    /// Marks everything but the last `keepingLast` turns compacted without
+    /// calling a model. What `/compact` runs: immediate and free, at the cost of
+    /// a cruder digest.
+    @discardableResult
+    public func compactWithoutSummarizing(
+        keepingLast keep: Int = 6,
+        maxSummaryCharacters: Int = 2000
+    ) -> Bool {
+        let replayable = replayableHistory()
+        guard replayable.count > keep else { return false }
+        let folded = replayable.prefix(replayable.count - keep)
+        let transcript = folded.map { message in
+            let role = message.role == .user ? "User" : "Assistant"
+            return "\(role): \(message.plainText)"
+        }
+        .joined(separator: "\n")
+        summary = String((summary + "\n" + transcript).suffix(maxSummaryCharacters))
+        compactedMessageIDs.formUnion(folded.map(\.id))
+        return true
     }
 
     private func syncFromReducer() {

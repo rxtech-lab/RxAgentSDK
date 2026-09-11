@@ -63,24 +63,50 @@ public enum MCPConfigRenderer {
 
     // MARK: - Codex: `-c mcp_servers.<name>={…}` TOML
 
+    /// A Codex invocation's MCP wiring: the `-c` overrides, and the environment
+    /// those overrides refer to.
+    ///
+    /// The environment exists because of `bearer_token_env_var`. Codex reads an
+    /// HTTP server's credential from a *named environment variable* rather than
+    /// from the config value, so a rendered override alone is not enough — the
+    /// caller has to put the token in the child's environment under the name the
+    /// override cites. Returning both together is what keeps the two in step.
+    public struct CodexMCPConfiguration: Sendable, Equatable {
+        public let overrides: [String]
+        public let environment: [String: String]
+
+        public init(overrides: [String], environment: [String: String]) {
+            self.overrides = overrides
+            self.environment = environment
+        }
+    }
+
     /// Codex config overrides, one `-c` pair per server.
     ///
-    /// Two rules learned the hard way:
+    /// Rules learned the hard way:
     ///
     /// 1. The value must be a **complete inline table**. A partial override
     ///    fails validation unless the server already exists in
     ///    `~/.codex/config.toml`, which we can't assume.
     /// 2. A bare `enabled=false` fails with "invalid transport" — a disabled
     ///    server must still declare its transport, so we simply omit it instead.
-    public static func codexOverrides(
+    /// 3. `Authorization` is **not** a plain header here. Codex owns that header
+    ///    for HTTP MCP servers and expects the token via `bearer_token_env_var`;
+    ///    passing it through `http_headers` gets it overwritten or duplicated.
+    ///    Routing it through the environment also keeps the token out of `ps`,
+    ///    which every `-c` value is visible in.
+    public static func codexConfiguration(
         servers: [MCPServerSpec],
         toolServer: LocalToolServerHandle?
-    ) -> [String] {
+    ) -> CodexMCPConfiguration {
         var overrides: [String] = []
+        var environment: [String: String] = [:]
 
         for server in servers where server.enabled {
-            guard let table = codexInlineTable(for: server.transport) else { continue }
-            overrides += ["-c", "mcp_servers.\(tomlKey(server.name))=\(table)"]
+            guard let rendered = codexInlineTable(for: server.transport, name: server.name)
+            else { continue }
+            overrides += ["-c", "mcp_servers.\(tomlKey(server.name))=\(rendered.table)"]
+            environment.merge(rendered.environment) { _, new in new }
         }
 
         if let toolServer {
@@ -88,10 +114,41 @@ public enum MCPConfigRenderer {
             overrides += ["-c", "mcp_servers.\(tomlKey(toolServer.name))=\(table)"]
         }
 
-        return overrides
+        return CodexMCPConfiguration(overrides: overrides, environment: environment)
     }
 
-    private static func codexInlineTable(for transport: MCPServerSpec.Transport) -> String? {
+    /// Back-compatible shape for callers that only want the `-c` pairs.
+    ///
+    /// Prefer ``codexConfiguration(servers:toolServer:)`` — a server with an
+    /// `Authorization` header will not authenticate through this one, because
+    /// the environment half of the pair is dropped.
+    public static func codexOverrides(
+        servers: [MCPServerSpec],
+        toolServer: LocalToolServerHandle?
+    ) -> [String] {
+        codexConfiguration(servers: servers, toolServer: toolServer).overrides
+    }
+
+    private struct RenderedCodexServer {
+        var table: String
+        var environment: [String: String]
+    }
+
+    /// Environment variable name carrying `server`'s bearer token.
+    ///
+    /// Namespaced and upper-cased so two servers cannot collide, and so the name
+    /// is a legal shell identifier whatever the server was called.
+    static func codexTokenEnvironmentKey(for name: String) -> String {
+        let sanitized = name.map { character -> Character in
+            character.isLetter || character.isNumber ? character : "_"
+        }
+        return "RXAGENT_MCP_TOKEN_" + String(sanitized).uppercased()
+    }
+
+    private static func codexInlineTable(
+        for transport: MCPServerSpec.Transport,
+        name: String
+    ) -> RenderedCodexServer? {
         switch transport {
         case .stdio(let command, let args, let env):
             var fields = ["command = \(tomlString(command))"]
@@ -100,10 +157,37 @@ public enum MCPConfigRenderer {
                 let pairs = env.map { "\(tomlKey($0.key)) = \(tomlString($0.value))" }
                 fields.append("env = { \(pairs.sorted().joined(separator: ", ")) }")
             }
-            return "{ \(fields.joined(separator: ", ")) }"
+            return RenderedCodexServer(
+                table: "{ \(fields.joined(separator: ", ")) }",
+                environment: [:]
+            )
 
-        case .http(let url, _), .sse(let url, _):
-            return "{ url = \(tomlString(url.absoluteString)) }"
+        case .http(let url, let headers), .sse(let url, let headers):
+            var fields = ["url = \(tomlString(url.absoluteString))"]
+            var environment: [String: String] = [:]
+
+            // Authorization goes through the env var channel; see rule 3 above.
+            var passthrough = headers
+            if let authorization = passthrough.removeValue(forKey: "Authorization") {
+                let token = authorization.hasPrefix("Bearer ")
+                    ? String(authorization.dropFirst("Bearer ".count))
+                    : authorization
+                let key = codexTokenEnvironmentKey(for: name)
+                environment[key] = token
+                fields.append("bearer_token_env_var = \(tomlString(key))")
+            }
+
+            if !passthrough.isEmpty {
+                let pairs = passthrough
+                    .map { "\(tomlKey($0.key)) = \(tomlString($0.value))" }
+                    .sorted()
+                fields.append("http_headers = { \(pairs.joined(separator: ", ")) }")
+            }
+
+            return RenderedCodexServer(
+                table: "{ \(fields.joined(separator: ", ")) }",
+                environment: environment
+            )
         }
     }
 

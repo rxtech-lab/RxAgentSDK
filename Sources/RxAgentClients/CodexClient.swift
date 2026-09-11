@@ -29,6 +29,7 @@ public struct CodexClient: AgentClient {
     let approvalPolicy: CodexApprovalPolicy
     let sandbox: CodexSandboxMode
     let configOverrides: [String]
+    let environmentOverrides: [String: String]
 
     private let runtime: CodexRuntime
 
@@ -39,6 +40,7 @@ public struct CodexClient: AgentClient {
         approvalPolicy: CodexApprovalPolicy = .onRequest,
         sandbox: CodexSandboxMode = .workspaceWrite,
         configOverrides: [String] = [],
+        environment: [String: String] = [:],
         capabilities: AgentCapabilities = .codexDefaults
     ) {
         self.id = id
@@ -47,6 +49,7 @@ public struct CodexClient: AgentClient {
         self.approvalPolicy = approvalPolicy
         self.sandbox = sandbox
         self.configOverrides = configOverrides
+        self.environmentOverrides = environment
         self.capabilities = capabilities
         self.runtime = CodexRuntime()
     }
@@ -86,14 +89,21 @@ public struct CodexClient: AgentClient {
             return
         }
 
-        var arguments = ["app-server", "--listen", "stdio://"]
-        arguments += MCPConfigRenderer.codexOverrides(
+        let mcp = MCPConfigRenderer.codexConfiguration(
             servers: request.mcpServers,
             toolServer: request.toolServer
         )
+
+        var arguments = ["app-server", "--listen", "stdio://"]
+        arguments += mcp.overrides
         arguments += configOverrides
 
-        let environment = await ShellEnvironment.shared.environment()
+        // `mcp.environment` carries the bearer tokens the `-c` overrides name via
+        // `bearer_token_env_var`; without merging it in, an authenticated HTTP
+        // MCP server gets a config pointing at a variable that does not exist.
+        var environment = await ShellEnvironment.shared.environment()
+        environment.merge(environmentOverrides) { _, new in new }
+        environment.merge(mcp.environment) { _, new in new }
         let process: ManagedProcess
         do {
             process = try ManagedProcess.launch(

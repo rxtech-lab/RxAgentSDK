@@ -17,6 +17,8 @@ public struct AgentClientID: Hashable, Sendable, Codable, ExpressibleByStringLit
 
     public static let claudeCode: AgentClientID = "claude-code"
     public static let codex: AgentClientID = "codex"
+    public static let openAICompatible: AgentClientID = "openai-compatible"
+    public static let foundationModels: AgentClientID = "foundation-models"
 
     /// Namespaced id for an ACP agent, e.g. `acp:gemini`.
     public static func acp(_ name: String) -> AgentClientID { AgentClientID("acp:\(name)") }
@@ -43,12 +45,29 @@ public enum AgentProvider: String, Codable, CaseIterable, Sendable, Hashable {
     case claudeCode
     case codex
     case acp
+    /// An OpenAI-compatible `/chat/completions` endpoint, driven in-process.
+    case openAICompatible
+    /// Apple's on-device model, driven in-process.
+    case foundationModels
 
     public var displayName: String {
         switch self {
         case .claudeCode: "Claude Code"
         case .codex: "Codex"
         case .acp: "ACP"
+        case .openAICompatible: "OpenAI-compatible"
+        case .foundationModels: "Apple Intelligence"
+        }
+    }
+
+    /// Whether the provider runs an agent binary in a child process.
+    ///
+    /// The line that matters for platform support: everything on the far side of
+    /// it is macOS-only, everything on this side works on iOS too.
+    public var spawnsProcess: Bool {
+        switch self {
+        case .claudeCode, .codex, .acp: true
+        case .openAICompatible, .foundationModels: false
         }
     }
 }
@@ -87,6 +106,18 @@ public extension AgentCapabilities {
     static let acpDefaults: AgentCapabilities = [
         .todos, .fileEdit, .mcpServers, .thinking,
     ]
+
+    /// No `.hooks` or `.skills`: both are agent-binary mechanisms, and an
+    /// in-process loop has neither to honour. No `.planMode` either — there is
+    /// no agent to hold a plan for us.
+    static let openAICompatibleDefaults: AgentCapabilities = [
+        .fileEdit, .usageReporting, .attachments, .mcpServers, .modelSelection,
+    ]
+
+    /// Deliberately small. The on-device model has a context window measured in
+    /// low thousands of tokens, no tool calling worth the name, and no usage
+    /// reporting.
+    static let foundationModelsDefaults: AgentCapabilities = []
 }
 
 // MARK: - Model Options

@@ -206,8 +206,16 @@ public struct ClaudeCodeClient: AgentClient {
             arguments += ["--permission-mode", request.permissionMode.rawValue]
         }
 
-        if !request.permissionMode.skipsHookPipeline, !preapprovedTools.isEmpty {
-            arguments += ["--allowedTools", preapprovedTools.joined(separator: ",")]
+        if !request.permissionMode.skipsHookPipeline {
+            let allowed = Self.allowedToolArgument(for: request, preapproved: preapprovedTools)
+            if !allowed.isEmpty {
+                arguments += ["--allowedTools", allowed.joined(separator: ",")]
+            }
+        }
+
+        let disallowed = Self.disallowedToolArgument(for: request)
+        if !disallowed.isEmpty {
+            arguments += ["--disallowedTools", disallowed.joined(separator: ",")]
         }
 
         if let hookSettingsPath = files.hookSettingsPath {
@@ -235,6 +243,46 @@ public struct ClaudeCodeClient: AgentClient {
         }
 
         return arguments
+    }
+
+    /// What `--allowedTools` should say this turn.
+    ///
+    /// Without a turn allowlist this is just the client's pre-approved set —
+    /// internal mechanics that shouldn't each cost an approval round trip.
+    ///
+    /// **With** one, the pre-approved set is dropped. An allowlist means the
+    /// host has enumerated the entire surface it wants reachable; silently
+    /// re-adding `Read`, `Bash` and friends underneath it would defeat the
+    /// point for an app whose agent has no business touching the filesystem.
+    /// Each name is expanded into the namespaced spellings the CLI will
+    /// actually see (see ``MCPToolName``), since the host declares bare names.
+    public static func allowedToolArgument(
+        for request: AgentSendRequest,
+        preapproved: [String]
+    ) -> [String] {
+        guard let allowed = request.allowedTools else { return preapproved }
+
+        let servers = request.mcpServerNames
+        var result: [String] = []
+        for name in allowed where !request.disallowedTools.contains(name) {
+            for spelling in MCPToolName.spellings(of: name, servers: servers)
+            where !result.contains(spelling) {
+                result.append(spelling)
+            }
+        }
+        return result
+    }
+
+    public static func disallowedToolArgument(for request: AgentSendRequest) -> [String] {
+        let servers = request.mcpServerNames
+        var result: [String] = []
+        for name in request.disallowedTools {
+            for spelling in MCPToolName.spellings(of: name, servers: servers)
+            where !result.contains(spelling) {
+                result.append(spelling)
+            }
+        }
+        return result
     }
 
     // MARK: - Lifecycle

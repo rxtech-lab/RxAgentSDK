@@ -8,11 +8,19 @@ import SwiftUI
 /// let agent = Agent(clients: [ClaudeCodeClient(), CodexClient()])
 /// AgentChatView(agent: agent)
 /// ```
-public struct AgentChatView<RowContent: View>: View {
+public struct AgentChatView<RowContent: View, Accessories: View>: View {
     private let agent: Agent
     private let rowContent: ((AgentTranscriptItem) -> RowContent)?
+    private let completions: [AgentCompletionSource]
+    private let onDropFiles: (([URL]) -> Bool)?
+    private let accessories: Accessories
 
-    @State private var draft = ""
+    /// Supplied when the host keeps the draft itself — one agent per
+    /// conversation means switching conversations would otherwise discard a
+    /// half-written message.
+    private let externalDraft: Binding<String>?
+
+    @State private var internalDraft = ""
     @State private var attachments: [AgentAttachment] = []
     @State private var isAtBottom = true
     @State private var shouldScrollToBottom = false
@@ -22,23 +30,72 @@ public struct AgentChatView<RowContent: View>: View {
     @State private var floatingChromeHeight: CGFloat = 0
 
     @Environment(\.agentTheme) private var theme
+    @Environment(\.agentToolbarVisibility) private var toolbarVisibility
 
-    public init(agent: Agent) where RowContent == AgentMessageRow {
+    /// The full form. Everything app-specific enters here:
+    ///
+    /// - `completions` supplies the `/` and `@` popups.
+    /// - `accessories` is the row under the field — engine pickers, mode
+    ///   toggles, anything the host wants beside the composer.
+    /// - `row` replaces the default transcript row, for hosts that render
+    ///   message kinds the SDK doesn't know about.
+    public init(
+        agent: Agent,
+        draft: Binding<String>? = nil,
+        completions: [AgentCompletionSource] = [],
+        onDropFiles: (([URL]) -> Bool)? = nil,
+        @ViewBuilder row: @escaping (AgentTranscriptItem) -> RowContent,
+        @ViewBuilder accessories: () -> Accessories
+    ) {
         self.agent = agent
+        self.externalDraft = draft
+        self.rowContent = row
+        self.completions = completions
+        self.onDropFiles = onDropFiles
+        self.accessories = accessories()
+    }
+
+    public init(agent: Agent, draft: Binding<String>? = nil)
+    where RowContent == AgentMessageRow, Accessories == EmptyView {
+        self.agent = agent
+        self.externalDraft = draft
         self.rowContent = nil
+        self.completions = []
+        self.onDropFiles = nil
+        self.accessories = EmptyView()
     }
 
     public init(
         agent: Agent,
+        draft: Binding<String>? = nil,
         @ViewBuilder row: @escaping (AgentTranscriptItem) -> RowContent
-    ) {
+    ) where Accessories == EmptyView {
         self.agent = agent
+        self.externalDraft = draft
         self.rowContent = row
+        self.completions = []
+        self.onDropFiles = nil
+        self.accessories = EmptyView()
+    }
+
+    public init(
+        agent: Agent,
+        draft: Binding<String>? = nil,
+        completions: [AgentCompletionSource] = [],
+        onDropFiles: (([URL]) -> Bool)? = nil,
+        @ViewBuilder accessories: () -> Accessories
+    ) where RowContent == AgentMessageRow {
+        self.agent = agent
+        self.externalDraft = draft
+        self.rowContent = nil
+        self.completions = completions
+        self.onDropFiles = onDropFiles
+        self.accessories = accessories()
     }
 
     public var body: some View {
         VStack(spacing: 0) {
-            if agent.clients.count > 1 { toolbar }
+            if showsToolbar { toolbar }
 
             // The composer floats over the transcript rather than sitting under
             // it in a stack, so there is no rule across the window and content
@@ -66,16 +123,25 @@ public struct AgentChatView<RowContent: View>: View {
             shouldScrollToBottom: shouldScrollToBottom,
             bottomInset: floatingChromeHeight,
             isAtBottom: $isAtBottom,
-            rowPadding: theme.rowPadding
-        ) { item in
-            if let rowContent {
-                rowContent(item)
-            } else {
-                AgentMessageRow(item: item)
+            rowPadding: theme.rowPadding,
+            accessoryContent: { accessory in
+                if accessory.kind == .streamingIndicator {
+                    AgentStreamingIndicator(
+                        isStreaming: isStreaming,
+                        usage: agent.thread.usage
+                    )
+                }
+            },
+            rowContent: { item in
+                if let rowContent {
+                    rowContent(item)
+                } else {
+                    AgentMessageRow(item: item)
+                }
             }
-        }
+        )
         .frame(maxHeight: .infinity)
-        .background(theme.background)
+        .background(theme.listBackground)
     }
 
     // MARK: Floating chrome
@@ -91,14 +157,21 @@ public struct AgentChatView<RowContent: View>: View {
             }
 
             AgentComposer(
-                text: $draft,
+                text: draft,
                 attachments: attachments,
                 isStreaming: isStreaming,
+                completions: completions,
+                queuedTurns: agent.queuedTurns,
+                history: promptHistory,
                 onSend: send,
                 onStop: { agent.stop() },
                 onRemoveAttachment: { attachment in
                     attachments.removeAll { $0.id == attachment.id }
-                }
+                },
+                onRemoveQueuedTurn: { agent.removeQueuedTurn(id: $0) },
+                onMergeQueuedTurns: { agent.mergeQueuedTurns() },
+                onDropFiles: onDropFiles,
+                accessories: { accessories }
             )
         }
         .onGeometryChange(for: CGFloat.self) { geometry in
@@ -143,13 +216,47 @@ public struct AgentChatView<RowContent: View>: View {
 
     // MARK: State
 
+    /// Ours to draw only when the host hasn't taken the job over.
+    private var showsToolbar: Bool {
+        switch toolbarVisibility {
+        case .automatic: agent.clients.count > 1
+        case .visible: true
+        case .hidden: false
+        }
+    }
+
+    /// The host's draft when it supplied one, otherwise our own.
+    private var draft: Binding<String> {
+        externalDraft ?? $internalDraft
+    }
+
     private var isStreaming: Bool {
         if case .streaming = agent.phase { return true }
         return false
     }
 
     private var items: [AgentTranscriptItem] {
-        AgentTranscriptItem.items(for: agent.thread.messages)
+        var rows = AgentTranscriptItem.items(for: agent.thread.messages)
+        if showsFoot { rows.append(.accessory(.streamingIndicator)) }
+        return rows
+    }
+
+    /// The foot row earns its place while a turn is running, and afterwards for
+    /// as long as there is a token total to report — which is the only place
+    /// that number appears once a host hides the header.
+    private var showsFoot: Bool {
+        guard !agent.thread.messages.isEmpty else { return false }
+        if isStreaming { return true }
+        guard let usage = agent.thread.usage else { return false }
+        return usage.inputTokens + usage.outputTokens > 0
+    }
+
+    /// What ↑ walks back through: this thread's own prompts, oldest first.
+    private var promptHistory: [String] {
+        agent.thread.messages
+            .filter { $0.role == .user }
+            .map(\.plainText)
+            .filter { !$0.isEmpty }
     }
 
     private var pendingPermission: Binding<PermissionRequest?> {
@@ -162,8 +269,8 @@ public struct AgentChatView<RowContent: View>: View {
     // MARK: Actions
 
     private func send() {
-        let text = draft
-        draft = ""
+        let text = draft.wrappedValue
+        draft.wrappedValue = ""
         let sending = attachments
         attachments = []
         agent.send(text, attachments: sending)
