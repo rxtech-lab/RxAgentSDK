@@ -168,6 +168,57 @@ struct CodexTurnDecoderTests {
         #expect(events.toolStarts[0].1 == "mcp__node_repl__run")
     }
 
+    // Codex app-server's McpToolCallThreadItem uses `server` and `tool`.
+    // Exercise the transcript consumed by grouped cards, individual cards and
+    // detail sheets, both while a call runs and after its result arrives.
+    @Test("Current Codex MCP items retain actual tool names throughout the transcript")
+    func currentMCPToolNames() async throws {
+        let events = await collect { continuation in
+            let decoder = makeDecoder(continuation)
+            for tool in ["marketplace_list", "marketplace_show"] {
+                var item: [String: JSONValue] = [
+                    "type": .string("mcpToolCall"),
+                    "id": .string("call_\(tool)"),
+                    "server": .string("film_workflow"),
+                    "tool": .string(tool),
+                    "arguments": .object(["kind": .string("template")]),
+                    "status": .string("inProgress"),
+                    "result": .null,
+                    "error": .null,
+                ]
+                await decoder.handleNotification(
+                    method: "item/started", params: .object(["item": .object(item)])
+                )
+                item["status"] = .string("completed")
+                item["result"] = .object([
+                    "content": .array([.object([
+                        "type": .string("text"), "text": .string("done"),
+                    ])]),
+                ])
+                await decoder.handleNotification(
+                    method: "item/completed", params: .object(["item": .object(item)])
+                )
+            }
+            await decoder.finishTurn(threadID: "t1")
+        }
+
+        var transcript = TranscriptReducer()
+        for event in events {
+            _ = transcript.apply(event)
+            if case .toolCallStarted(let id, _) = event {
+                let call = try #require(transcript.messages.flatMap(\.toolCalls).last)
+                #expect(call.id == id)
+                #expect(call.name == "mcp__film_workflow__\(id.dropFirst(5))")
+                #expect(!call.isComplete)
+            }
+        }
+        let calls = transcript.messages.flatMap(\.toolCalls)
+        #expect(calls.map { MCPToolName.bare($0.name) } == ["marketplace_list", "marketplace_show"])
+        #expect(calls.allSatisfy { $0.isComplete && !$0.isError })
+        #expect(calls.allSatisfy { $0.input == ["kind": .string("template")] })
+    }
+
+
     @Test("Plan updates become todos")
     func planUpdates() async {
         let events = await collect { continuation in
