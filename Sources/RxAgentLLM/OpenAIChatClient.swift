@@ -374,7 +374,9 @@ public struct OpenAIChatClient: AgentClient {
             switch message.role {
             case .user:
                 let text = message.plainText
-                if !text.isEmpty { messages.append(OpenAIMessage(role: "user", text: text)) }
+                if !text.isEmpty || !message.attachments.isEmpty {
+                    messages.append(userMessage(text: text, attachments: message.attachments))
+                }
             case .assistant:
                 // Only the prose is replayed. A historical tool call would have
                 // to be paired with its `tool` result message to be valid, and
@@ -388,8 +390,18 @@ public struct OpenAIChatClient: AgentClient {
             }
         }
 
-        var parts: [OpenAIMessage.Part] = [.text(request.prompt)]
-        for attachment in request.attachments {
+        messages.append(userMessage(text: request.prompt, attachments: request.attachments, cacheControl: true))
+        return messages
+    }
+
+    private static func userMessage(
+        text: String, attachments: [AgentAttachment], cacheControl: Bool = false
+    ) -> OpenAIMessage {
+        guard !attachments.isEmpty else {
+            return OpenAIMessage(role: "user", text: text, cacheControl: cacheControl)
+        }
+        var parts: [OpenAIMessage.Part] = text.isEmpty ? [] : [.text(text)]
+        for attachment in attachments {
             switch attachment.kind {
             case .image(let data, let mimeType):
                 parts.append(.imageURL("data:\(mimeType);base64,\(data.base64EncodedString())"))
@@ -399,14 +411,7 @@ public struct OpenAIChatClient: AgentClient {
                 parts.append(.text("Attached file: \(url.path)"))
             }
         }
-
-        messages.append(
-            parts.count == 1
-                ? OpenAIMessage(role: "user", text: request.prompt, cacheControl: true)
-                : OpenAIMessage(role: "user", parts: parts)
-        )
-
-        return messages
+        return OpenAIMessage(role: "user", parts: parts)
     }
 
     /// `endpoint` may be a base URL or the completions URL itself.

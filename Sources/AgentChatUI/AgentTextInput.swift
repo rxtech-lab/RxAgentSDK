@@ -1,4 +1,5 @@
 import SwiftUI
+import RxAgentCore
 
 /// Key events the composer wants to intercept before the text view sees them.
 ///
@@ -13,19 +14,28 @@ public struct AgentTextInputHandlers {
     public var onDownArrow: @MainActor () -> Bool
     public var onTab: @MainActor () -> Bool
     public var onEscape: @MainActor () -> Bool
+    public var onPasteImages: (@MainActor ([AgentAttachment]) -> Void)?
+    public var onDropFiles: (@MainActor ([URL]) -> Bool)?
+    public var onAttachmentError: @MainActor (Error) -> Void
 
     public init(
         onReturn: @escaping @MainActor () -> Void = {},
         onUpArrow: @escaping @MainActor () -> Bool = { false },
         onDownArrow: @escaping @MainActor () -> Bool = { false },
         onTab: @escaping @MainActor () -> Bool = { false },
-        onEscape: @escaping @MainActor () -> Bool = { false }
+        onEscape: @escaping @MainActor () -> Bool = { false },
+        onPasteImages: (@MainActor ([AgentAttachment]) -> Void)? = nil,
+        onDropFiles: (@MainActor ([URL]) -> Bool)? = nil,
+        onAttachmentError: @escaping @MainActor (Error) -> Void = { _ in }
     ) {
         self.onReturn = onReturn
         self.onUpArrow = onUpArrow
         self.onDownArrow = onDownArrow
         self.onTab = onTab
         self.onEscape = onEscape
+        self.onPasteImages = onPasteImages
+        self.onDropFiles = onDropFiles
+        self.onAttachmentError = onAttachmentError
     }
 }
 
@@ -99,6 +109,7 @@ public struct AgentTextInput: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.smartInsertDeleteEnabled = false
+        textView.registerForDraggedTypes([.fileURL])
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
         textView.isHorizontallyResizable = false
@@ -170,6 +181,9 @@ public struct AgentTextInput: NSViewRepresentable {
         textView.onDownArrow = handlers.onDownArrow
         textView.onTab = handlers.onTab
         textView.onEscape = handlers.onEscape
+        textView.onPasteImages = handlers.onPasteImages
+        textView.onDropFiles = handlers.onDropFiles
+        textView.onAttachmentError = handlers.onAttachmentError
         textView.onMarkedTextChange = { active in
             if hasMarkedText != active { hasMarkedText = active }
         }
@@ -210,6 +224,9 @@ final class AgentNSTextView: NSTextView {
     var onDownArrow: @MainActor () -> Bool = { false }
     var onTab: @MainActor () -> Bool = { false }
     var onEscape: @MainActor () -> Bool = { false }
+    var onPasteImages: (@MainActor ([AgentAttachment]) -> Void)?
+    var onDropFiles: (@MainActor ([URL]) -> Bool)?
+    var onAttachmentError: @MainActor (Error) -> Void = { _ in }
     var onMarkedTextChange: (Bool) -> Void = { _ in }
     var onFocusChange: (Bool) -> Void = { _ in }
 
@@ -219,12 +236,53 @@ final class AgentNSTextView: NSTextView {
         onDownArrow = { false }
         onTab = { false }
         onEscape = { false }
+        onPasteImages = nil
+        onDropFiles = nil
+        onAttachmentError = { _ in }
         onMarkedTextChange = { _ in }
         onFocusChange = { _ in }
     }
 
     var placeholder: String = "" {
         didSet { needsDisplay = true }
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if onDropFiles != nil, !droppedURLs(sender.draggingPasteboard).isEmpty { return .copy }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if onDropFiles != nil, !droppedURLs(sender.draggingPasteboard).isEmpty { return .copy }
+        return super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let urls = droppedURLs(sender.draggingPasteboard)
+        if !urls.isEmpty, let onDropFiles { return onDropFiles(urls) }
+        return super.performDragOperation(sender)
+    }
+
+    private func droppedURLs(_ pasteboard: NSPasteboard) -> [URL] {
+        pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+
+    override func paste(_ sender: Any?) {
+        if pasteImages(from: .general) { return }
+        super.paste(sender)
+    }
+
+    /// Returns false for ordinary text, preserving AppKit's selection and undo.
+    func pasteImages(from pasteboard: NSPasteboard) -> Bool {
+        guard let onPasteImages else { return false }
+        do {
+            let images = try AgentImageLoader.pastedImages(from: pasteboard)
+            guard !images.isEmpty else { return false }
+            onPasteImages(images)
+        } catch {
+            onAttachmentError(error)
+        }
+        return true
     }
 
     override func becomeFirstResponder() -> Bool {

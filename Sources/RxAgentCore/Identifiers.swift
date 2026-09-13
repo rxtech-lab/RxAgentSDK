@@ -99,7 +99,7 @@ public extension AgentCapabilities {
     ]
 
     static let codexDefaults: AgentCapabilities = [
-        .todos, .planMode, .fileEdit, .usageReporting,
+        .todos, .planMode, .fileEdit, .usageReporting, .attachments,
         .mcpServers, .modelSelection, .thinking,
     ]
 

@@ -53,9 +53,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
     @State private var pinning = MessageListPinningController<Message.ID>()
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var scrollViewHeight: CGFloat = 0
-    @State private var latestUserMinY: CGFloat = 0
-    @State private var tailMarkerMinY: CGFloat = 0
-    @State private var activeTurnMaxMeasuredHeight: CGFloat = 0
+    @State private var activeTurnMeasurement: MessageListTurnMeasurement<Message.ID>?
     @State private var canReleasePinnedUserMessageByScroll = false
     @State private var pinTask: Task<Void, Never>?
     @State private var bottomScrollTask: Task<Void, Never>?
@@ -101,16 +99,31 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     topLoadTrigger
 
-                    ForEach(messages) { message in
-                        let messageID = message.id
+                    ForEach(historyMessages) { message in
                         rowContent(message)
-                            .onGeometryChange(for: CGFloat.self) { geometry in
-                                geometry.frame(in: .named(MessageListConstants.coordinateSpaceName)).minY
-                            } action: { value in
-                                guard messageID == pinning.pinnedUserMessageID else { return }
-                                updateLatestUserMinY(value)
+                            .id(message.id)
+                    }
+
+                    if let pinnedID = pinning.pinnedUserMessageID {
+                        // Measure the current turn as one block. Separate lazy-row
+                        // positions can update in different passes while scrolling,
+                        // making their difference include unrelated history.
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(pinnedTurnMessages) { message in
+                                rowContent(message)
+                                    .id(message.id)
                             }
-                            .id(messageID)
+                        }
+                        .onGeometryChange(for: MessageListTurnMeasurement<Message.ID>.self) { geometry in
+                            MessageListTurnMeasurement(userMessageID: pinnedID, height: geometry.size.height)
+                        } action: { measurement in
+                            guard measurement.userMessageID == pinning.pinnedUserMessageID else { return }
+                            var transaction = Transaction()
+                            transaction.animation = nil
+                            withTransaction(transaction) {
+                                activeTurnMeasurement = measurement
+                            }
+                        }
                     }
 
                     tailMarker
@@ -131,7 +144,6 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                     bottomInsetSpacer
                     bottomAnchor
                 }
-                .coordinateSpace(.named(MessageListConstants.coordinateSpaceName))
             }
             .scrollIndicators(.hidden)
             .onGeometryChange(for: CGFloat.self) { geometry in
@@ -216,11 +228,6 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         Color.clear
             .frame(height: 1)
             .id(MessageListConstants.tailMarkerID)
-            .onGeometryChange(for: CGFloat.self) { geometry in
-                geometry.frame(in: .named(MessageListConstants.coordinateSpaceName)).minY
-            } action: { value in
-                updateTailMarkerMinY(value)
-            }
     }
 
     private var bottomLoadTrigger: some View {
@@ -270,7 +277,8 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         // tracked user message — NOT the transient `isPinningUserMessage` flag — so the
         // reserved space survives scrolling and the pin "releasing"; it only collapses
         // naturally as the turn grows to fill the viewport, or when the latest user
-        // message changes (which resets the measurement to the new turn).
+        // message changes. A single size measurement also lets the reservation
+        // grow again when tool rows collapse or text reflows in a wider window.
         //
         // `bottomInset` is subtracted because the inset spacer already occupies
         // that much of the viewport below the turn. Without this the two would
@@ -284,15 +292,23 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         )
     }
 
-    private var rawActiveTurnMeasuredHeight: CGFloat {
-        max(0, tailMarkerMinY - latestUserMinY)
+    private var activeTurnHeight: CGFloat {
+        guard let measurement = activeTurnMeasurement,
+              measurement.userMessageID == pinning.pinnedUserMessageID else { return 0 }
+        return measurement.height
     }
 
-    private var activeTurnHeight: CGFloat {
-        // Use only the settled, ratcheted height (committed from `handleScrollMetrics`).
-        // Mixing in the live `rawActiveTurnMeasuredHeight` here would let a mid-frame
-        // desync between the two geometry anchors momentarily shrink the spacer.
-        activeTurnMaxMeasuredHeight
+    private var pinnedTurnStartIndex: Int? {
+        guard let pinnedID = pinning.pinnedUserMessageID else { return nil }
+        return messages.firstIndex { $0.id == pinnedID }
+    }
+
+    private var historyMessages: ArraySlice<Message> {
+        messages[..<(pinnedTurnStartIndex ?? messages.endIndex)]
+    }
+
+    private var pinnedTurnMessages: ArraySlice<Message> {
+        messages[(pinnedTurnStartIndex ?? messages.endIndex)...]
     }
 
     private var pinnedTurnFillsViewport: Bool {
@@ -344,16 +360,6 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
             isUserDriven: isUserDrivenScroll
         )
         updateIsAtBottomBinding(anchor.isNearBottom)
-
-        // Commit the active-turn height here rather than from the per-row geometry
-        // callbacks. This callback fires once the scroll view's geometry has settled
-        // for the frame, so `latestUserMinY` and `tailMarkerMinY` are guaranteed to
-        // reflect the same layout pass. Reading them from the individual row
-        // callbacks could capture a transient state where one anchor moved (e.g. a
-        // lazy row above the turn was just realized while scrolling) but the other
-        // had not — which would ratchet a bogus height and permanently collapse the
-        // reserved tail spacer.
-        updateActiveTurnMaxMeasuredHeight()
 
         if shouldReleasePinnedUserMessageForFilledTurn, !isUserDrivenScroll {
             releasePinnedUserMessage(proxy: proxy)
@@ -530,9 +536,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
     private func clearPinnedUserMessage() {
         pinTask?.cancel()
         pinning.clear()
-        latestUserMinY = 0
-        tailMarkerMinY = 0
-        activeTurnMaxMeasuredHeight = 0
+        activeTurnMeasurement = nil
         canReleasePinnedUserMessageByScroll = false
     }
 
@@ -546,7 +550,6 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         case .clearPin:
             clearPinnedUserMessage()
         case .pinUserMessageToTop:
-            resetPinnedTurnMeasurements()
             canReleasePinnedUserMessageByScroll = false
             scrollLatestTurnIntoView(proxy: proxy, animated: true)
         case .repinUserMessageToTop:
@@ -560,43 +563,6 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
             releasePinnedUserMessage(proxy: proxy)
         case .scrollToBottom:
             scheduleScrollToBottom(proxy: proxy)
-        }
-    }
-
-    private func resetPinnedTurnMeasurements() {
-        latestUserMinY = 0
-        tailMarkerMinY = 0
-        activeTurnMaxMeasuredHeight = 0
-    }
-
-    private func updateLatestUserMinY(_ value: CGFloat) {
-        guard abs(value - latestUserMinY) > 0.5 else { return }
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            latestUserMinY = value
-        }
-    }
-
-    private func updateTailMarkerMinY(_ value: CGFloat) {
-        guard abs(value - tailMarkerMinY) > 0.5 else { return }
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            tailMarkerMinY = value
-        }
-    }
-
-    private func updateActiveTurnMaxMeasuredHeight() {
-        // Keep measuring the turn height while a latest user message is tracked, even
-        // after the pin "releases", so the persistent tail spacer stays correctly sized.
-        guard pinning.pinnedUserMessageID != nil else { return }
-        let measured = rawActiveTurnMeasuredHeight
-        guard measured > activeTurnMaxMeasuredHeight + 0.5 else { return }
-        var transaction = Transaction()
-        transaction.animation = nil
-        withTransaction(transaction) {
-            activeTurnMaxMeasuredHeight = measured
         }
     }
 
@@ -653,6 +619,11 @@ nonisolated struct MessageListScrollMetrics: Equatable {
     var visibleMaxY: CGFloat
 }
 
+private nonisolated struct MessageListTurnMeasurement<ID: Hashable & Sendable>: Equatable {
+    var userMessageID: ID
+    var height: CGFloat
+}
+
 private nonisolated struct MessageListChangeToken<ID: Hashable & Sendable>: Equatable {
     var ids: [ID]
     var latestContentID: ID?
@@ -662,7 +633,6 @@ private nonisolated struct MessageListChangeToken<ID: Hashable & Sendable>: Equa
 private nonisolated enum MessageListConstants {
     static let bottomAnchorID = "message-list-bottom-anchor"
     static let tailMarkerID = "message-list-tail-marker"
-    static let coordinateSpaceName = "message-list-content"
     static let loadThreshold: CGFloat = 96
     static let minimumPinnedTailSpacing: CGFloat = 16
     static let userScrollDownDelta: CGFloat = 4

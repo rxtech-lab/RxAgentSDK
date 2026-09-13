@@ -111,8 +111,8 @@ public struct AgentMessage: Sendable, Hashable, Identifiable {
 
 // MARK: - Attachments
 
-public struct AgentAttachment: Sendable, Hashable, Identifiable {
-    public enum Kind: Sendable, Hashable {
+public struct AgentAttachment: Sendable, Hashable, Identifiable, Codable {
+    public enum Kind: Sendable, Hashable, Codable {
         case file(URL)
         case image(Data, mimeType: String)
         case text(String)

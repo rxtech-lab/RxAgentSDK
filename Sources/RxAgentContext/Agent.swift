@@ -37,6 +37,10 @@ public final class Agent {
     public private(set) var clients: [any AgentClient]
     public private(set) var activeClientID: AgentClientID
 
+    /// Unsent attachments belong to this conversation, including when its view
+    /// is closed or another conversation becomes visible.
+    public var draftAttachments: [AgentAttachment] = []
+
     public var tools: [AnyAgentTool]
     public var skills: [Skill]
     public var mcpServers: [MCPServerSpec]
@@ -246,7 +250,7 @@ public final class Agent {
 
     public func send(_ text: String, attachments: [AgentAttachment] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard !phase.isBusy else {
             queuedTurns.append(QueuedTurn(text: trimmed, attachments: attachments))
             return
