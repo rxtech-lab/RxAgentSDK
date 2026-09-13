@@ -11,7 +11,6 @@ public struct AgentStreamingIndicator: View {
     private let isStreaming: Bool
     private let usage: UsageInfo?
 
-    @State private var animating = false
     @Environment(\.agentTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -35,18 +34,18 @@ public struct AgentStreamingIndicator: View {
     }
 
     private var dots: some View {
-        HStack(spacing: 5) {
-            ForEach(0 ..< 3, id: \.self) { index in
-                Circle()
-                    .fill(theme.secondaryText.opacity(0.6))
-                    .frame(width: 6, height: 6)
-                    .scaleEffect(animating ? 1.0 : 0.5)
-                    .animation(
-                        .easeInOut(duration: 0.45)
-                            .repeatForever(autoreverses: true)
-                            .delay(Double(index) * 0.15),
-                        value: animating
-                    )
+        // A retained token footer can outlive the dots between turns. Derive
+        // their scale from time so reappearing never needs to reset a state flag.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            HStack(spacing: 5) {
+                ForEach(0 ..< 3, id: \.self) { index in
+                    let phase = (context.date.timeIntervalSinceReferenceDate - Double(index) * 0.15)
+                        * (2 * .pi / 0.9)
+                    Circle()
+                        .fill(theme.secondaryText.opacity(0.6))
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(reduceMotion ? 0.5 : 0.75 - 0.25 * cos(phase))
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -54,7 +53,6 @@ public struct AgentStreamingIndicator: View {
         .glassEffect(.regular, in: .capsule)
         // Reduce Motion still gets the row — it just holds still, so the reader
         // keeps the "something is happening" signal without the pulse.
-        .onAppear { animating = !reduceMotion }
         .accessibilityHidden(true)
     }
 
