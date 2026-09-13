@@ -142,7 +142,7 @@ public struct ClaudeCodeClient: AgentClient {
                 "type": "user",
                 "message": [
                     "role": "user",
-                    "content": [["type": "text", "text": composePrompt(request)]],
+                    "content": userMessageContent(request),
                 ],
             ])
         } catch {
@@ -201,6 +201,24 @@ public struct ClaudeCodeClient: AgentClient {
             prompt += "\n\nAttached files:\n" + files.map { "- \($0)" }.joined(separator: "\n")
         }
         return prompt
+    }
+
+    func userMessageContent(_ request: AgentSendRequest) -> [[String: Any]] {
+        var content: [[String: Any]] = [["type": "text", "text": composePrompt(request)]]
+        for attachment in request.attachments {
+            switch attachment.kind {
+            case .image(let data, let mimeType):
+                content.append(["type": "image", "source": [
+                    "type": "base64", "media_type": mimeType,
+                    "data": data.base64EncodedString(),
+                ]])
+            case .text(let text):
+                content.append(["type": "text", "text": text])
+            case .file:
+                break // File paths are already included by composePrompt.
+            }
+        }
+        return content
     }
 
     func buildArguments(request: AgentSendRequest, files: ClaudeTurnFiles) -> [String] {

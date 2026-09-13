@@ -58,8 +58,7 @@ struct AgentMessageBubble: View {
     private var attachmentChips: some View {
         HStack(spacing: 6) {
             ForEach(message.attachments) { attachment in
-                Label(attachment.label ?? "attachment", systemImage: "paperclip")
-                    .font(.caption)
+                AgentAttachmentPreview(attachment: attachment)
                     .foregroundStyle(theme.secondaryText)
             }
         }

@@ -433,6 +433,19 @@ dismisses one. On macOS the field is an `NSTextView` rather than a `TextEditor`:
 `TextEditor` overrides `insertText` to enforce binding sync, which races with the input
 method and drops composing Hangul and kana on commit.
 
+### Attachments
+
+The composer's **+** button selects files or folders. Drop either directly onto the
+input field, or paste an image with Command-V. Images show a thumbnail; files and
+folders show their names. Every attachment can be removed before sending, and a turn
+can contain attachments without text. Draft attachments live on the `Agent`, so
+switching conversations does not move them into another draft.
+
+Images are imported as bytes (TIFF screenshots are converted to PNG), delivered as
+image inputs to Codex, Claude Code, and OpenAI-compatible clients, and replayed on
+later OpenAI-compatible turns. Files and folders remain local path references for
+the agent's tools. Engines without attachment support do not offer the add button.
+
 ### Dynamic spacing
 
 When you send a message it pins to the top of the viewport and the reply grows into
@@ -442,10 +455,12 @@ reserved space beneath it, instead of the whole list jumping. The reserved heigh
 max(0, scrollViewHeight - bottomInset - activeTurnHeight - minimumPinnedTailSpacing)
 ```
 
-`activeTurnHeight` is measured as `tailMarkerMinY - latestUserMinY` and **ratchets** —
-it only ever grows, and is committed only from the scroll-geometry callback. Reading it
-from per-row callbacks can catch a half-settled layout pass and lock in a wrong height
-permanently. The constants and that ratchet are a spec, not tunables.
+`activeTurnHeight` comes from one size measurement of the latest user message and
+all rows after it, including the streaming indicator. Earlier history remains lazy.
+The measurement does not depend on scroll position or separately updated row origins,
+so scrolling through history cannot consume the reserved space. It can also shrink
+when tool rows collapse or text reflows, restoring the corresponding space. The
+reservation remains associated with that user message after automatic pinning ends.
 
 ### Previews
 

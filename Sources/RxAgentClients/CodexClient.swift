@@ -261,14 +261,24 @@ public struct CodexClient: AgentClient {
         return .object(params)
     }
 
-    private func turnParams(_ request: AgentSendRequest, threadID: String) -> JSONValue {
+    func turnParams(_ request: AgentSendRequest, threadID: String) -> JSONValue {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
             "cwd": .string(request.workingDirectory.path),
             "input": .array([.object([
                 "type": .string("text"),
                 "text": .string(composePrompt(request)),
-            ])]),
+            ])] + request.attachments.map { attachment in
+                switch attachment.kind {
+                case .image(let data, let mimeType):
+                    .object(["type": .string("image"),
+                             "url": .string("data:\(mimeType);base64,\(data.base64EncodedString())")])
+                case .file(let url):
+                    .object(["type": .string("text"), "text": .string("Attached file: \(url.path)")])
+                case .text(let text):
+                    .object(["type": .string("text"), "text": .string(text)])
+                }
+            }),
             "approvalPolicy": .string(effectiveApprovalPolicy(request).rawValue),
             "sandboxPolicy": sandboxPolicy(request),
         ]

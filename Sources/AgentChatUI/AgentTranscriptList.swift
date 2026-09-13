@@ -127,7 +127,7 @@ private nonisolated extension AgentMessage {
 /// Chat-shaped wrapper over ``MessageList``.
 ///
 /// Everything that makes the scrolling feel right — pinning the user's message
-/// to the top, reserving space for the answer, the ratcheted turn height —
+/// to the top, reserving space for the answer, measuring the current turn —
 /// lives in `MessageList`. This layer only decides what a row looks like.
 public struct AgentTranscriptList<AccessoryContent: View, RowContent: View>: View {
     private let items: [AgentTranscriptItem]

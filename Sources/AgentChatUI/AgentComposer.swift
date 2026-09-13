@@ -2,6 +2,10 @@ import os
 import RxAgentContext
 import RxAgentCore
 import SwiftUI
+import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 /// The input area: text, attachments, completions, queued turns, send / stop.
 ///
@@ -28,10 +32,11 @@ public struct AgentComposer<Accessories: View>: View {
     private let history: [String]
     private let onSend: () -> Void
     private let onStop: () -> Void
+    private let onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)?
     private let onRemoveAttachment: ((AgentAttachment) -> Void)?
     private let onRemoveQueuedTurn: ((UUID) -> Void)?
     private let onMergeQueuedTurns: (() -> Void)?
-    private let onDropFiles: (([URL]) -> Bool)?
+    private let onDropFiles: (@MainActor ([URL]) -> Bool)?
     private let accessories: Accessories
 
     @State private var isInputFocused = false
@@ -40,6 +45,8 @@ public struct AgentComposer<Accessories: View>: View {
     @State private var selectedCompletion = 0
     @State private var historyIndex = -1
     @State private var isDropTargeted = false
+    @State private var showsAttachmentPicker = false
+    @State private var attachmentError: String?
 
     @Environment(\.agentTheme) private var theme
 
@@ -53,10 +60,11 @@ public struct AgentComposer<Accessories: View>: View {
         history: [String] = [],
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void = {},
+        onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)? = nil,
         onRemoveAttachment: ((AgentAttachment) -> Void)? = nil,
         onRemoveQueuedTurn: ((UUID) -> Void)? = nil,
         onMergeQueuedTurns: (() -> Void)? = nil,
-        onDropFiles: (([URL]) -> Bool)? = nil,
+        onDropFiles: (@MainActor ([URL]) -> Bool)? = nil,
         @ViewBuilder accessories: () -> Accessories
     ) {
         self._text = text
@@ -68,6 +76,7 @@ public struct AgentComposer<Accessories: View>: View {
         self.history = history
         self.onSend = onSend
         self.onStop = onStop
+        self.onAddAttachments = onAddAttachments
         self.onRemoveAttachment = onRemoveAttachment
         self.onRemoveQueuedTurn = onRemoveQueuedTurn
         self.onMergeQueuedTurns = onMergeQueuedTurns
@@ -78,16 +87,24 @@ public struct AgentComposer<Accessories: View>: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !queuedTurns.isEmpty { queuedStrip }
-            if !attachments.isEmpty { attachmentRow }
-
             VStack(alignment: .leading, spacing: 6) {
+                if !attachments.isEmpty { attachmentRow }
                 HStack(alignment: .bottom, spacing: 8) {
                     field
                     actionButton
                 }
 
-                if !(accessories is EmptyView) {
+                if onAddAttachments != nil || !(accessories is EmptyView) {
                     HStack(spacing: 8) {
+                        if onAddAttachments != nil {
+                            Button(action: presentAttachmentPicker) {
+                                Image(systemName: "plus")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Add files or folders")
+                            .accessibilityLabel("Add attachments")
+                            .accessibilityIdentifier("agent-composer-add-attachment")
+                        }
                         accessories
                         Spacer(minLength: 0)
                     }
@@ -129,6 +146,20 @@ public struct AgentComposer<Accessories: View>: View {
         .onDrop(of: [.fileURL], isTargeted: dropBinding) { providers in
             handleDrop(providers)
         }
+        .fileImporter(isPresented: $showsAttachmentPicker, allowedContentTypes: [.item, .folder], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): addAttachmentFiles(urls)
+            case .failure(let error): attachmentError = error.localizedDescription
+            }
+        }
+        .alert("Couldn't add attachment", isPresented: Binding(
+            get: { attachmentError != nil },
+            set: { if !$0 { attachmentError = nil } }
+        )) {
+            Button("OK") { attachmentError = nil }
+        } message: {
+            Text(attachmentError ?? "")
+        }
     }
 
     // MARK: - Field
@@ -148,7 +179,13 @@ public struct AgentComposer<Accessories: View>: View {
                 onUpArrow: handleUpArrow,
                 onDownArrow: handleDownArrow,
                 onTab: handleTab,
-                onEscape: handleEscape
+                onEscape: handleEscape,
+                onPasteImages: onAddAttachments,
+                onDropFiles: onAddAttachments == nil ? onDropFiles : { @MainActor urls in
+                    addAttachmentFiles(urls)
+                    return true
+                },
+                onAttachmentError: { attachmentError = $0.localizedDescription }
             )
         )
         .frame(height: fieldHeight)
@@ -244,7 +281,7 @@ public struct AgentComposer<Accessories: View>: View {
 
             ForEach(queuedTurns) { turn in
                 HStack(spacing: 6) {
-                    Text(turn.text)
+                    Text(turn.text.isEmpty ? "Attachments (\(turn.attachments.count))" : turn.text)
                         .font(.caption)
                         .lineLimit(2)
                     Spacer(minLength: 0)
@@ -274,8 +311,7 @@ public struct AgentComposer<Accessories: View>: View {
             HStack(spacing: 6) {
                 ForEach(attachments) { attachment in
                     HStack(spacing: 4) {
-                        Image(systemName: "paperclip").font(.system(size: 10))
-                        Text(attachment.label ?? "attachment").font(.caption).lineLimit(1)
+                        AgentAttachmentPreview(attachment: attachment)
                         if let onRemoveAttachment {
                             Button {
                                 onRemoveAttachment(attachment)
@@ -283,6 +319,8 @@ public struct AgentComposer<Accessories: View>: View {
                                 Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Remove attachment")
+                            .accessibilityIdentifier("agent-remove-attachment-\(attachment.id)")
                         }
                     }
                     .padding(.horizontal, 8)
@@ -325,7 +363,7 @@ public struct AgentComposer<Accessories: View>: View {
     }
 
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
     }
 
     /// Sending while streaming is allowed: `Agent.send` queues it.
@@ -402,18 +440,50 @@ public struct AgentComposer<Accessories: View>: View {
 
     // MARK: - Drop
 
+    private func presentAttachmentPicker() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.title = "Add attachments"
+        panel.prompt = "Add"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        let completion: @MainActor (NSApplication.ModalResponse) -> Void = { response in
+            if response == .OK { addAttachmentFiles(panel.urls) }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
+        }
+        #else
+        showsAttachmentPicker = true
+        #endif
+    }
+
+    private func addAttachmentFiles(_ urls: [URL]) {
+        guard let onAddAttachments else { return }
+        var imported: [AgentAttachment] = []
+        for url in urls {
+            do { imported.append(try AgentImageLoader.attachment(from: url)) }
+            catch { attachmentError = error.localizedDescription }
+        }
+        if !imported.isEmpty { onAddAttachments(imported) }
+        focusTrigger = UUID()
+    }
+
     private var dropBinding: Binding<Bool> {
         Binding(
             get: { isDropTargeted },
             set: { value in
-                guard onDropFiles != nil else { return }
+                guard onDropFiles != nil || onAddAttachments != nil else { return }
                 isDropTargeted = value
             }
         )
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let onDropFiles else { return false }
+        guard onDropFiles != nil || onAddAttachments != nil else { return false }
 
         Task { @MainActor in
             var urls: [URL] = []
@@ -422,7 +492,11 @@ public struct AgentComposer<Accessories: View>: View {
                 urls.append(url)
             }
             guard !urls.isEmpty else { return }
-            _ = onDropFiles(urls)
+            if onAddAttachments != nil {
+                addAttachmentFiles(urls)
+            } else {
+                _ = onDropFiles?(urls)
+            }
         }
         return true
     }
@@ -441,10 +515,11 @@ public extension AgentComposer where Accessories == EmptyView {
         history: [String] = [],
         onSend: @escaping () -> Void,
         onStop: @escaping () -> Void = {},
+        onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)? = nil,
         onRemoveAttachment: ((AgentAttachment) -> Void)? = nil,
         onRemoveQueuedTurn: ((UUID) -> Void)? = nil,
         onMergeQueuedTurns: (() -> Void)? = nil,
-        onDropFiles: (([URL]) -> Bool)? = nil
+        onDropFiles: (@MainActor ([URL]) -> Bool)? = nil
     ) {
         self.init(
             text: text,
@@ -456,6 +531,7 @@ public extension AgentComposer where Accessories == EmptyView {
             history: history,
             onSend: onSend,
             onStop: onStop,
+            onAddAttachments: onAddAttachments,
             onRemoveAttachment: onRemoveAttachment,
             onRemoveQueuedTurn: onRemoveQueuedTurn,
             onMergeQueuedTurns: onMergeQueuedTurns,

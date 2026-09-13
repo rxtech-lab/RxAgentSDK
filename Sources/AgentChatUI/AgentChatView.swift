@@ -12,7 +12,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     private let agent: Agent
     private let rowContent: ((AgentTranscriptItem) -> RowContent)?
     private let completions: [AgentCompletionSource]
-    private let onDropFiles: (([URL]) -> Bool)?
+    private let onDropFiles: (@MainActor ([URL]) -> Bool)?
     private let accessories: Accessories
 
     /// Supplied when the host keeps the draft itself — one agent per
@@ -21,7 +21,8 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     private let externalDraft: Binding<String>?
 
     @State private var internalDraft = ""
-    @State private var attachments: [AgentAttachment] = []
+    private var attachments: [AgentAttachment] { agent.draftAttachments }
+    @State private var attachmentSendError: String?
     @State private var isAtBottom = true
     @State private var shouldScrollToBottom = false
     @State private var scrollRequest: Task<Void, Never>?
@@ -44,7 +45,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
         agent: Agent,
         draft: Binding<String>? = nil,
         completions: [AgentCompletionSource] = [],
-        onDropFiles: (([URL]) -> Bool)? = nil,
+        onDropFiles: (@MainActor ([URL]) -> Bool)? = nil,
         @ViewBuilder row: @escaping (AgentTranscriptItem) -> RowContent,
         @ViewBuilder accessories: () -> Accessories
     ) {
@@ -83,7 +84,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
         agent: Agent,
         draft: Binding<String>? = nil,
         completions: [AgentCompletionSource] = [],
-        onDropFiles: (([URL]) -> Bool)? = nil,
+        onDropFiles: (@MainActor ([URL]) -> Bool)? = nil,
         @ViewBuilder accessories: () -> Accessories
     ) where RowContent == AgentMessageRow {
         self.agent = agent
@@ -112,6 +113,12 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
         // never selected — without this the reasoning picker would stay empty
         // until the user changed engines.
         .task { await agent.refreshClientOptions() }
+        .alert("Attachments aren't supported", isPresented: Binding(
+            get: { attachmentSendError != nil },
+            set: { if !$0 { attachmentSendError = nil } }
+        )) {
+            Button("OK") { attachmentSendError = nil }
+        } message: { Text(attachmentSendError ?? "") }
         .sheet(item: pendingPermission) { request in
             AgentPermissionSheet(request: request) { decision in
                 (agent.permissions as? InteractivePermissionCoordinator)?.respond(decision)
@@ -170,8 +177,10 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
                 history: promptHistory,
                 onSend: send,
                 onStop: { agent.stop() },
+                onAddAttachments: agent.activeClient.capabilities.contains(.attachments)
+                    ? { @MainActor images in agent.draftAttachments.append(contentsOf: images) } : nil,
                 onRemoveAttachment: { attachment in
-                    attachments.removeAll { $0.id == attachment.id }
+                    agent.draftAttachments.removeAll { $0.id == attachment.id }
                 },
                 onRemoveQueuedTurn: { agent.removeQueuedTurn(id: $0) },
                 onMergeQueuedTurns: { agent.mergeQueuedTurns() },
@@ -286,10 +295,14 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     // MARK: Actions
 
     private func send() {
+        guard attachments.isEmpty || agent.activeClient.capabilities.contains(.attachments) else {
+            attachmentSendError = "This agent doesn't support attachments. Choose another agent or remove the attachments."
+            return
+        }
         let text = draft.wrappedValue
         draft.wrappedValue = ""
         let sending = attachments
-        attachments = []
+        agent.draftAttachments = []
         agent.send(text, attachments: sending)
         pulseScrollToBottom()
     }
