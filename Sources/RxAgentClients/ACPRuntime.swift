@@ -57,6 +57,9 @@ actor ACPRuntime {
         if let variable = client.modelEnvVar, let model = request.model {
             overrides[variable] = model
         }
+        if let variable = client.effortEnvVar, let effort = request.effort {
+            overrides[variable] = effort
+        }
         let environment = await ShellEnvironment.shared.environment(overrides: overrides)
 
         let process = try ManagedProcess.launch(

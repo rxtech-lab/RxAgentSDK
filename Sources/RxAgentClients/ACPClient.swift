@@ -29,6 +29,14 @@ public struct ACPClient: AgentClient {
     /// Some agents select their model through an env var rather than a protocol
     /// field (e.g. `ANTHROPIC_MODEL`).
     let modelEnvVar: String?
+    /// ACP has no reasoning field, so an agent that has the dial at all takes it
+    /// through its own env var (e.g. `GEMINI_THINKING_LEVEL`). Set alongside
+    /// ``reasoningLevels``; without it a chosen level has nowhere to go.
+    ///
+    /// Read when the child is **spawned**, and the process outlives the turn —
+    /// so a level chosen mid-conversation applies from the next new session on.
+    let effortEnvVar: String?
+    let reasoningLevels: [AgentReasoningOption]
 
     private let runtime: ACPRuntime
 
@@ -41,6 +49,8 @@ public struct ACPClient: AgentClient {
         id: AgentClientID? = nil,
         displayName: String? = nil,
         modelEnvVar: String? = nil,
+        effortEnvVar: String? = nil,
+        reasoningLevels: [AgentReasoningOption] = [],
         capabilities: AgentCapabilities = .acpDefaults
     ) {
         let name = displayName ?? binaryFile.deletingPathExtension().lastPathComponent
@@ -49,6 +59,8 @@ public struct ACPClient: AgentClient {
         self.launch = .binary(path: binaryFile.path, args: args)
         self.environmentOverrides = env
         self.modelEnvVar = modelEnvVar
+        self.effortEnvVar = effortEnvVar
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = ACPRuntime()
     }
@@ -60,6 +72,8 @@ public struct ACPClient: AgentClient {
         displayName: String,
         id: AgentClientID? = nil,
         modelEnvVar: String? = nil,
+        effortEnvVar: String? = nil,
+        reasoningLevels: [AgentReasoningOption] = [],
         capabilities: AgentCapabilities = .acpDefaults
     ) {
         self.id = id ?? .acp(package)
@@ -67,6 +81,8 @@ public struct ACPClient: AgentClient {
         self.launch = .npx(package: package, args: args)
         self.environmentOverrides = env
         self.modelEnvVar = modelEnvVar
+        self.effortEnvVar = effortEnvVar
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = ACPRuntime()
     }
@@ -78,6 +94,8 @@ public struct ACPClient: AgentClient {
         displayName: String,
         id: AgentClientID? = nil,
         modelEnvVar: String? = nil,
+        effortEnvVar: String? = nil,
+        reasoningLevels: [AgentReasoningOption] = [],
         capabilities: AgentCapabilities = .acpDefaults
     ) {
         self.id = id ?? .acp(package)
@@ -85,6 +103,8 @@ public struct ACPClient: AgentClient {
         self.launch = .uvx(package: package, args: args)
         self.environmentOverrides = env
         self.modelEnvVar = modelEnvVar
+        self.effortEnvVar = effortEnvVar
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = ACPRuntime()
     }
@@ -96,6 +116,8 @@ public struct ACPClient: AgentClient {
         displayName: String,
         id: AgentClientID,
         modelEnvVar: String? = nil,
+        effortEnvVar: String? = nil,
+        reasoningLevels: [AgentReasoningOption] = [],
         capabilities: AgentCapabilities = .acpDefaults
     ) {
         self.id = id
@@ -103,11 +125,19 @@ public struct ACPClient: AgentClient {
         self.launch = .custom(command: command, args: args)
         self.environmentOverrides = env
         self.modelEnvVar = modelEnvVar
+        self.effortEnvVar = effortEnvVar
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = ACPRuntime()
     }
 
     // MARK: - Availability
+
+    /// Whatever the host declared at `init`. Empty by default: ACP has no
+    /// standard reasoning control, so the SDK cannot guess one agent's levels.
+    public func availableReasoningLevels() async -> [AgentReasoningOption] {
+        reasoningLevels
+    }
 
     public func isAvailable() async -> Bool {
         switch launch {

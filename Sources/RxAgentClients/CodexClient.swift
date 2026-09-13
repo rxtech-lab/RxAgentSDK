@@ -28,8 +28,10 @@ public struct CodexClient: AgentClient {
     let binaryPath: String?
     let approvalPolicy: CodexApprovalPolicy
     let sandbox: CodexSandboxMode
+    /// TOML `key=value` entries. Each is passed with its own `-c` flag.
     let configOverrides: [String]
     let environmentOverrides: [String: String]
+    let reasoningLevels: [AgentReasoningOption]
 
     private let runtime: CodexRuntime
 
@@ -41,6 +43,7 @@ public struct CodexClient: AgentClient {
         sandbox: CodexSandboxMode = .workspaceWrite,
         configOverrides: [String] = [],
         environment: [String: String] = [:],
+        reasoningLevels: [AgentReasoningOption] = .codexEfforts,
         capabilities: AgentCapabilities = .codexDefaults
     ) {
         self.id = id
@@ -50,6 +53,7 @@ public struct CodexClient: AgentClient {
         self.sandbox = sandbox
         self.configOverrides = configOverrides
         self.environmentOverrides = environment
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = CodexRuntime()
     }
@@ -66,6 +70,11 @@ public struct CodexClient: AgentClient {
             AgentModelOption(id: "gpt-5-codex", displayName: "GPT-5 Codex"),
             AgentModelOption(id: "gpt-5", displayName: "GPT-5"),
         ]
+    }
+
+    /// What `model_reasoning_effort` accepts.
+    public func availableReasoningLevels() async -> [AgentReasoningOption] {
+        reasoningLevels
     }
 
     // MARK: - Send
@@ -94,9 +103,7 @@ public struct CodexClient: AgentClient {
             toolServer: request.toolServer
         )
 
-        var arguments = ["app-server", "--listen", "stdio://"]
-        arguments += mcp.overrides
-        arguments += configOverrides
+        let arguments = launchArguments(mcpOverrides: mcp.overrides, effort: request.effort)
 
         // `mcp.environment` carries the bearer tokens the `-c` overrides name via
         // `bearer_token_env_var`; without merging it in, an authenticated HTTP
@@ -203,11 +210,39 @@ public struct CodexClient: AgentClient {
         }
 
         await connection.close()
+        process.closeStdin()
         await process.terminate()
+        // terminate only sends a signal. Do not let the next turn resume while
+        // this process still owns the native thread's persistence writer.
+        _ = await process.waitForExit()
         continuation.finish()
     }
 
     // MARK: - Params
+
+    /// Codex has no per-turn reasoning field: effort is a config key, and the
+    /// child process is spawned per turn, so the turn's choice rides in on `-c`.
+    ///
+    /// A `configOverrides` entry that already pins `model_reasoning_effort`
+    /// wins — a deployment that hard-codes the key meant it, and appending a
+    /// second `-c` for the same key would leave which one applies up to the
+    /// CLI's merge order.
+    func launchArguments(mcpOverrides: [String] = [], effort: String? = nil) -> [String] {
+        var arguments = ["app-server", "--listen", "stdio://"]
+            + mcpOverrides
+            + configOverrides.flatMap { ["-c", $0] }
+        if let effort, !effort.isEmpty, !pinsReasoningEffort {
+            arguments += ["-c", "model_reasoning_effort=\"\(effort)\""]
+        }
+        return arguments
+    }
+
+    private var pinsReasoningEffort: Bool {
+        configOverrides.contains { override in
+            override.split(separator: "=", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespaces) == "model_reasoning_effort"
+        }
+    }
 
     private func startParams(_ request: AgentSendRequest) -> JSONValue {
         var params: [String: JSONValue] = [

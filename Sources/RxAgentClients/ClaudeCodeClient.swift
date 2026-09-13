@@ -25,6 +25,7 @@ public struct ClaudeCodeClient: AgentClient {
     let extraArguments: [String]
     let environmentOverrides: [String: String]
     let preapprovedTools: [String]
+    let reasoningLevels: [AgentReasoningOption]
 
     private let runtime: ClaudeRuntime
 
@@ -35,6 +36,7 @@ public struct ClaudeCodeClient: AgentClient {
         extraArguments: [String] = [],
         environment: [String: String] = [:],
         preapprovedTools: [String] = ClaudeCodeClient.defaultSafeTools,
+        reasoningLevels: [AgentReasoningOption] = .claudeCodeEfforts,
         capabilities: AgentCapabilities = .claudeCodeDefaults
     ) {
         self.id = id
@@ -43,6 +45,7 @@ public struct ClaudeCodeClient: AgentClient {
         self.extraArguments = extraArguments
         self.environmentOverrides = environment
         self.preapprovedTools = preapprovedTools
+        self.reasoningLevels = reasoningLevels
         self.capabilities = capabilities
         self.runtime = ClaudeRuntime()
     }
@@ -64,6 +67,13 @@ public struct ClaudeCodeClient: AgentClient {
             AgentModelOption(id: "sonnet", displayName: "Sonnet"),
             AgentModelOption(id: "haiku", displayName: "Haiku"),
         ]
+    }
+
+    /// What `--effort` accepts. Narrow this at `init` when the deployment pins a
+    /// model that supports fewer levels — an older Opus takes `low`/`medium`/
+    /// `high` only, and the CLI rejects a level its model does not know.
+    public func availableReasoningLevels() async -> [AgentReasoningOption] {
+        reasoningLevels
     }
 
     /// Warm the PATH cache so the first turn doesn't pay a login-shell round trip.

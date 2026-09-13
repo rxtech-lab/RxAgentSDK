@@ -38,7 +38,20 @@ struct AgentChatPreviewHarness: View {
 private func previewAgent(scripts: [(AgentClientID, String, AgentEventScript)]) -> Agent {
     Agent(
         clients: scripts.map { id, name, script in
-            PreviewAgentClient(id: id, displayName: name, script: script)
+            // Each stand-in advertises the vocabulary its real counterpart does,
+            // so the header's reasoning picker changes on a switch — and
+            // disappears for the ACP agent, which has no effort dial.
+            let levels: [AgentReasoningOption] = switch id.rawValue {
+            case "codex": .codexEfforts
+            case let raw where raw.hasPrefix("acp:"): []
+            default: .claudeCodeEfforts
+            }
+            return PreviewAgentClient(
+                id: id,
+                displayName: name,
+                script: script,
+                reasoningLevels: levels
+            )
         },
         workingDirectory: URL(filePath: NSTemporaryDirectory())
     )

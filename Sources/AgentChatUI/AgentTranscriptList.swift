@@ -69,11 +69,56 @@ public nonisolated struct AgentTranscriptItem: Identifiable, MessageListItem, Eq
     }
 
     /// Build rows from a transcript, collapsing runs of transient tool calls.
+    ///
+    /// A run is consecutive assistant messages that carry nothing but tool
+    /// calls. When a run reaches `transientGroupMinSize` messages it becomes a
+    /// single ``Kind/transientGroup`` holding every call in order; shorter runs
+    /// and everything else stay one row per message. Pass nil to never fold.
     public static func items(
         for messages: [AgentMessage],
-        transientGroupMinSize: Int = 3
+        transientGroupMinSize: Int? = nil
     ) -> [AgentTranscriptItem] {
-        messages.map { .message($0) }
+        guard let minSize = transientGroupMinSize, minSize > 0 else {
+            return messages.map { .message($0) }
+        }
+
+        var items: [AgentTranscriptItem] = []
+        var run: [AgentMessage] = []
+        func flush() {
+            guard !run.isEmpty else { return }
+            if run.count >= minSize {
+                items.append(.transientGroup(run.flatMap(\.toolCalls)))
+            } else {
+                items.append(contentsOf: run.map { .message($0) })
+            }
+            run.removeAll()
+        }
+
+        for message in messages {
+            if message.isToolOnly {
+                run.append(message)
+            } else {
+                flush()
+                items.append(.message(message))
+            }
+        }
+        flush()
+        return items
+    }
+}
+
+private nonisolated extension AgentMessage {
+    /// An assistant message with tool calls and nothing worth a row of its
+    /// own: blank text and thinking don't count, an error always does.
+    var isToolOnly: Bool {
+        guard role == .assistant, error == nil, !toolCalls.isEmpty else { return false }
+        return blocks.allSatisfy { block in
+            switch block {
+            case .toolCall: true
+            case .text(_, let text), .thinking(_, let text):
+                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+        }
     }
 }
 

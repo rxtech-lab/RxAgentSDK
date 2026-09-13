@@ -152,6 +152,13 @@ struct ContentView: View {
             .help("Permission mode")
         }
 
+        // Reasoning effort. Draws nothing when the active client has no such
+        // dial, so it costs the toolbar nothing to keep it here.
+        ToolbarItem(placement: .navigation) {
+            AgentReasoningPicker(agent: agent)
+                .help("Reasoning effort")
+        }
+
         ToolbarItem {
             Toggle("Plan", isOn: $agent.planMode)
                 .toggleStyle(.button)

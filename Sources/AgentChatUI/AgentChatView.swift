@@ -31,6 +31,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
 
     @Environment(\.agentTheme) private var theme
     @Environment(\.agentToolbarVisibility) private var toolbarVisibility
+    @Environment(\.agentToolCallCollapse) private var toolCallCollapse
 
     /// The full form. Everything app-specific enters here:
     ///
@@ -107,6 +108,10 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background.ignoresSafeArea())
+        // `select(_:)` refreshes these on a switch, but the first client is
+        // never selected — without this the reasoning picker would stay empty
+        // until the user changed engines.
+        .task { await agent.refreshClientOptions() }
         .sheet(item: pendingPermission) { request in
             AgentPermissionSheet(request: request) { decision in
                 (agent.permissions as? InteractivePermissionCoordinator)?.respond(decision)
@@ -194,6 +199,10 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
                 )
             )
 
+            AgentModelPicker(agent: agent)
+
+            AgentReasoningPicker(agent: agent)
+
             if let usage = agent.thread.usage {
                 Text("\(usage.inputTokens + usage.outputTokens) tokens")
                     .font(.caption.monospacedDigit())
@@ -219,7 +228,11 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     /// Ours to draw only when the host hasn't taken the job over.
     private var showsToolbar: Bool {
         switch toolbarVisibility {
+        // Also when there is a model or a reasoning level to choose: with one
+        // client and no header, those pickers would have nowhere to live.
         case .automatic: agent.clients.count > 1
+            || !agent.availableReasoningLevels.isEmpty
+            || !agent.availableModels.isEmpty
         case .visible: true
         case .hidden: false
         }
@@ -236,7 +249,10 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     }
 
     private var items: [AgentTranscriptItem] {
-        var rows = AgentTranscriptItem.items(for: agent.thread.messages)
+        var rows = AgentTranscriptItem.items(
+            for: agent.thread.messages,
+            transientGroupMinSize: toolCallCollapse.minimumRun
+        )
         if showsFoot { rows.append(.accessory(.streamingIndicator)) }
         return rows
     }

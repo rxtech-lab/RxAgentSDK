@@ -48,6 +48,58 @@ struct AgentTranscriptItemTests {
         #expect(items[0].isUserMessage)
         #expect(!items[1].isUserMessage)
     }
+
+    private func toolMessage(_ name: String) -> AgentMessage {
+        AgentMessage(
+            role: .assistant,
+            blocks: [.toolCall(AgentToolCall(id: name, name: name, result: "ok", hasCompleteInput: true))]
+        )
+    }
+
+    @Test("items(for:) folds a run of tool-only messages into one group")
+    func itemsFoldToolRuns() {
+        let messages = [
+            AgentMessage.text("look around", role: .user),
+            toolMessage("list"),
+            toolMessage("read"),
+            toolMessage("search"),
+            AgentMessage.text("found it", role: .assistant),
+        ]
+        let items = AgentTranscriptItem.items(for: messages, transientGroupMinSize: 2)
+        #expect(items.count == 3)
+        guard case .transientGroup(let calls) = items[1].kind else {
+            Issue.record("expected a transient group, got \(items[1].kind)")
+            return
+        }
+        #expect(calls.map(\.name) == ["list", "read", "search"])
+        #expect(!items[2].isUserMessage)
+    }
+
+    @Test("items(for:) leaves runs shorter than the minimum alone")
+    func itemsKeepShortRuns() {
+        let messages = [toolMessage("list"), AgentMessage.text("done", role: .assistant)]
+        let items = AgentTranscriptItem.items(for: messages, transientGroupMinSize: 2)
+        #expect(items.count == 2)
+        if case .transientGroup = items[0].kind { Issue.record("a lone call must not fold") }
+    }
+
+    @Test("items(for:) never folds unless asked")
+    func itemsDefaultNoFold() {
+        let messages = [toolMessage("list"), toolMessage("read")]
+        #expect(AgentTranscriptItem.items(for: messages).count == 2)
+    }
+
+    @Test("A message with visible text breaks a run")
+    func textBreaksRun() {
+        var talkative = toolMessage("read")
+        talkative.blocks.append(.text(id: UUID(), "Here is what I found."))
+        let messages = [toolMessage("list"), talkative, toolMessage("search")]
+        let items = AgentTranscriptItem.items(for: messages, transientGroupMinSize: 2)
+        #expect(items.count == 3)
+        for item in items {
+            if case .transientGroup = item.kind { Issue.record("nothing should fold here") }
+        }
+    }
 }
 
 @MainActor

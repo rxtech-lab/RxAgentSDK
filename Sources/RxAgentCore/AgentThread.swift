@@ -105,6 +105,9 @@ public final class AgentThread: Identifiable {
     ) {
         reducer = TranscriptReducer(messages: messages)
         self.nativeSessionIDs = nativeSessionIDs
+        // Persisted transcripts do not identify the last client. Do not retain
+        // provenance from an earlier transcript loaded into this instance.
+        self.lastClientID = nil
         self.summary = summary
         self.compactedMessageIDs = compactedMessageIDs
         syncFromReducer()
