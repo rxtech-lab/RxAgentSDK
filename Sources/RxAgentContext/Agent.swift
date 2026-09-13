@@ -46,6 +46,12 @@ public final class Agent {
     public var permissionMode: PermissionMode
     public var planMode: Bool
     public var model: String?
+    /// Reasoning effort for the next turn, as the active client's own spelling —
+    /// the `id` of one of ``availableReasoningLevels``. `nil` leaves the agent
+    /// on its own default.
+    ///
+    /// Reset when the active client changes: the levels are per-provider, and
+    /// handing Codex an `xhigh` it has never heard of fails the turn.
     public var effort: String?
 
     /// When non-nil, the only tool names any client may call this thread.
@@ -59,9 +65,8 @@ public final class Agent {
     /// Thread-scoped values every tool invocation can read.
     @ObservationIgnored public var state = AgentStateValues()
 
-    /// Prepend a summary of the transcript when a turn runs on a client that has
-    /// not seen this thread before. Without it, switching providers mid-thread
-    /// gives the new agent a prompt with no history at all.
+    /// Share the transcript when a client joins or returns after another client.
+    /// A resumed native session does not contain the intervening clients' turns.
     public var sendsHandoffSummary: Bool = true
 
     /// When to fold older turns into the thread's rolling summary.
@@ -107,6 +112,9 @@ public final class Agent {
     /// Set when the last turn failed, for surfacing in UI.
     public private(set) var lastError: AgentError?
     public private(set) var availableModels: [AgentModelOption] = []
+    /// What the active client will accept for ``effort``, ascending. Empty when
+    /// it has no reasoning dial — UI should offer no picker at all then.
+    public private(set) var availableReasoningLevels: [AgentReasoningOption] = []
 
     @ObservationIgnored private var currentTurn: Task<Void, Never>?
     @ObservationIgnored private var currentTurnID: UUID?
@@ -152,11 +160,26 @@ public final class Agent {
         guard clients.contains(where: { $0.id == clientID }) else { return }
         activeClientID = clientID
         model = nil
-        Task { await refreshAvailableModels() }
+        effort = nil
+        Task { await refreshClientOptions() }
     }
 
     public func refreshAvailableModels() async {
         availableModels = await activeClient.availableModels()
+    }
+
+    public func refreshAvailableReasoningLevels() async {
+        availableReasoningLevels = await activeClient.availableReasoningLevels()
+        // A level the new client does not offer would be rejected on send.
+        if let effort, !availableReasoningLevels.contains(where: { $0.id == effort }) {
+            self.effort = nil
+        }
+    }
+
+    /// Both per-client option lists, for a view that has just appeared.
+    public func refreshClientOptions() async {
+        await refreshAvailableModels()
+        await refreshAvailableReasoningLevels()
     }
 
     // MARK: Threads
@@ -239,8 +262,6 @@ public final class Agent {
         // in-process client replays `history` and then sends `prompt`, so a
         // prompt that appears in both would reach the model twice.
         let history = thread.replayableHistory()
-        thread.appendUserMessage(trimmed, attachments: attachments)
-
         let request = buildRequest(
             turnID: turnID,
             prompt: trimmed,
@@ -248,6 +269,8 @@ public final class Agent {
             client: client,
             history: history
         )
+        // Build handoff context before appending, so the new prompt appears once.
+        thread.appendUserMessage(trimmed, attachments: attachments)
 
         currentTurn = Task { [weak self] in
             for await event in client.send(request) {
@@ -384,7 +407,7 @@ public final class Agent {
             if !summary.isEmpty {
                 parts.append("""
                 ## Conversation so far
-                This conversation began with a different agent. Here is what happened before you joined.
+                This thread may include work by other agents. Use this recent conversation to catch up before continuing.
 
                 \(summary)
                 """)
@@ -394,10 +417,11 @@ public final class Agent {
         return parts.joined(separator: "\n\n")
     }
 
-    /// True when this client has never run in this thread but someone else has.
+    /// Also catch returning clients up. After a reload, an unknown last client
+    /// conservatively gets the transcript once; native session ids stay intact.
     private func needsHandoffSummary(for client: any AgentClient) -> Bool {
-        !thread.hasRun(client: client.id) && !thread.messages.isEmpty
-            && thread.nativeSessionIDs.isEmpty == false
+        !thread.messages.isEmpty
+            && (!thread.hasRun(client: client.id) || thread.lastClientID != client.id)
     }
 
     /// Every tool that should be exposed on the local tool server this turn:

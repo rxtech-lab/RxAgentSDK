@@ -30,7 +30,10 @@ struct LiveCodexTests {
         let directory = try workspace()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let client = CodexClient()
+        let client = CodexClient(
+            sandbox: .readOnly,
+            configOverrides: ["model_reasoning_effort=\"low\""]
+        )
         let request = AgentSendRequest(
             threadID: AgentThreadID(),
             prompt: "Reply with exactly the word: pineapple. No other text.",
@@ -72,7 +75,10 @@ struct LiveCodexTests {
             prompt: "Remember the number 8675309. Reply with just: ok",
             workingDirectory: directory,
             permissions: AllowAllPermissions()
-        )) { _ = first.apply(event) }
+        )) {
+            if case .failed(let error) = event { Issue.record("Initial turn failed: \(error)") }
+            _ = first.apply(event)
+        }
 
         let nativeID = try #require(first.nativeSessionID)
 
@@ -83,7 +89,10 @@ struct LiveCodexTests {
             prompt: "What number did I ask you to remember? Reply with digits only.",
             workingDirectory: directory,
             permissions: AllowAllPermissions()
-        )) { _ = second.apply(event) }
+        )) {
+            if case .failed(let error) = event { Issue.record("Resume failed: \(error)") }
+            _ = second.apply(event)
+        }
 
         #expect(second.messages.map(\.plainText).joined().contains("8675309"))
     }

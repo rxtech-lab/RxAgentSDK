@@ -158,6 +158,7 @@ public struct PreviewAgentClient: AgentClient {
 
     private let script: AgentEventScript
     private let deltaInterval: Duration
+    private let reasoningLevels: [AgentReasoningOption]
 
     public init(
         id: AgentClientID = "preview",
@@ -165,7 +166,8 @@ public struct PreviewAgentClient: AgentClient {
         provider: AgentProvider = .claudeCode,
         capabilities: AgentCapabilities = .claudeCodeDefaults,
         script: AgentEventScript = .simpleAnswer,
-        deltaInterval: Duration = .milliseconds(12)
+        deltaInterval: Duration = .milliseconds(12),
+        reasoningLevels: [AgentReasoningOption] = .claudeCodeEfforts
     ) {
         self.id = id
         self.displayName = displayName
@@ -173,6 +175,7 @@ public struct PreviewAgentClient: AgentClient {
         self.capabilities = capabilities
         self.script = script
         self.deltaInterval = deltaInterval
+        self.reasoningLevels = reasoningLevels
     }
 
     public func isAvailable() async -> Bool { true }
@@ -182,6 +185,10 @@ public struct PreviewAgentClient: AgentClient {
             AgentModelOption(id: "preview-fast", displayName: "Preview Fast"),
             AgentModelOption(id: "preview-deep", displayName: "Preview Deep"),
         ]
+    }
+
+    public func availableReasoningLevels() async -> [AgentReasoningOption] {
+        reasoningLevels
     }
 
     public func send(_ request: AgentSendRequest) -> AsyncStream<AgentEvent> {

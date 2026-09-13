@@ -88,6 +88,12 @@ public struct AgentSendRequest: Sendable {
     public let attachments: [AgentAttachment]
     public let workingDirectory: URL
     public let model: String?
+    /// Reasoning effort, as the *active client's* own spelling — the `id` of one
+    /// of its ``AgentReasoningOption``s. `nil` leaves the agent on its default.
+    ///
+    /// Deliberately a string rather than an enum: the levels are not a shared
+    /// vocabulary (Codex has `minimal`, Claude has `xhigh` and `max`), and a
+    /// host-supplied provider must be able to name its own.
     public let effort: String?
     public let permissionMode: PermissionMode
     public let planMode: Bool
@@ -223,6 +229,15 @@ public protocol AgentClient: Sendable {
 
     func availableModels() async -> [AgentModelOption]
 
+    /// The reasoning-effort levels this client accepts, in ascending order of
+    /// effort. Empty means the client has no such dial, and UI should offer no
+    /// choice rather than an inert one.
+    ///
+    /// Whatever the user picks arrives back as ``AgentSendRequest/effort``, so
+    /// each option's `id` is that client's own spelling — see
+    /// ``AgentReasoningOption``.
+    func availableReasoningLevels() async -> [AgentReasoningOption]
+
     func send(_ request: AgentSendRequest) -> AsyncStream<AgentEvent>
 
     /// User-initiated stop. Should cause the stream to end with `.turnEnded`
@@ -237,5 +252,6 @@ public protocol AgentClient: Sendable {
 public extension AgentClient {
     func isAvailable() async -> Bool { true }
     func availableModels() async -> [AgentModelOption] { [] }
+    func availableReasoningLevels() async -> [AgentReasoningOption] { [] }
     func endSession(thread: AgentThreadID) async {}
 }

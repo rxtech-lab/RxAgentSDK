@@ -13,7 +13,39 @@ extension EnvironmentValues {
     @Entry public var agentToolbarVisibility: AgentToolbarVisibility = .automatic
 }
 
+/// Whether ``AgentChatView`` folds runs of consecutive tool-only assistant
+/// messages into a single ``AgentTranscriptItem/Kind/transientGroup`` row.
+public nonisolated enum AgentToolCallCollapse: Sendable, Hashable {
+    /// Every message is its own row.
+    case never
+    /// Runs of at least `minimum` consecutive tool-only messages fold into one
+    /// row. Anything else — text, thinking, an error — breaks the run.
+    case consecutive(minimum: Int = 2)
+
+    /// The run length that triggers a fold, or nil when folding is off.
+    public var minimumRun: Int? {
+        switch self {
+        case .never: nil
+        case .consecutive(let minimum): max(minimum, 1)
+        }
+    }
+}
+
+extension EnvironmentValues {
+    @Entry public var agentToolCallCollapse: AgentToolCallCollapse = .never
+}
+
 public extension View {
+    /// Fold runs of consecutive tool calls into one collapsed row.
+    ///
+    /// A long investigation — list, read, search, read again — otherwise
+    /// buries the answer under a column of near-identical chips. The host's
+    /// row renders the ``AgentTranscriptItem/Kind/transientGroup`` however it
+    /// likes; the default row shows a "N tool calls" disclosure.
+    func agentToolCallCollapse(_ mode: AgentToolCallCollapse) -> some View {
+        environment(\.agentToolCallCollapse, mode)
+    }
+
     /// Show or hide the chat surface's own header.
     ///
     /// Hide it when the host already offers an engine picker of its own through

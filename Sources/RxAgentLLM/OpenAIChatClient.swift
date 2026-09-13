@@ -37,6 +37,15 @@ public struct OpenAIChatClient: AgentClient {
         /// Extra top-level fields merged into the request body — where a
         /// gateway's own options go, e.g. `providerOptions`.
         public var extraBody: [String: JSONValue]
+        /// The reasoning-effort levels this endpoint accepts, offered to the
+        /// user by ``AgentClient/availableReasoningLevels()``. Empty — the
+        /// default — means the endpoint has no such dial: plenty of
+        /// OpenAI-compatible gateways front non-reasoning models, and a picker
+        /// whose every option is rejected is worse than no picker.
+        public var reasoningLevels: [AgentReasoningOption]
+        /// Body field the chosen level is sent as. `reasoning_effort` is the
+        /// OpenAI spelling; a gateway that nests it elsewhere needs its own key.
+        public var reasoningEffortKey: String
         /// Resolved per request, so a bearer token can be refreshed between
         /// turns without rebuilding the client.
         public var headers: @Sendable () async -> [String: String]
@@ -68,6 +77,8 @@ public struct OpenAIChatClient: AgentClient {
             endpoint: URL? = nil,
             defaultModel: String? = nil,
             extraBody: [String: JSONValue] = [:],
+            reasoningLevels: [AgentReasoningOption] = [],
+            reasoningEffortKey: String = "reasoning_effort",
             streaming: Bool = true,
             maxToolResultCharacters: Int = 120_000,
             timeout: TimeInterval = 300,
@@ -77,6 +88,8 @@ public struct OpenAIChatClient: AgentClient {
             self.endpoint = endpoint
             self.defaultModel = defaultModel
             self.extraBody = extraBody
+            self.reasoningLevels = reasoningLevels
+            self.reasoningEffortKey = reasoningEffortKey
             self.streaming = streaming && unaryTransport == nil
             self.maxToolResultCharacters = maxToolResultCharacters
             self.timeout = timeout
@@ -91,12 +104,14 @@ public struct OpenAIChatClient: AgentClient {
         public static func hosted(
             model: String? = nil,
             extraBody: [String: JSONValue] = [:],
+            reasoningLevels: [AgentReasoningOption] = [],
             send: @escaping @Sendable (Data) async throws -> Data
         ) -> Configuration {
             Configuration(
                 endpoint: URL(string: "https://host.invalid/chat/completions"),
                 defaultModel: model,
                 extraBody: extraBody,
+                reasoningLevels: reasoningLevels,
                 streaming: false,
                 unaryTransport: send
             )
@@ -107,9 +122,15 @@ public struct OpenAIChatClient: AgentClient {
             _ key: String,
             endpoint: URL,
             model: String? = nil,
-            extraBody: [String: JSONValue] = [:]
+            extraBody: [String: JSONValue] = [:],
+            reasoningLevels: [AgentReasoningOption] = []
         ) -> Configuration {
-            Configuration(endpoint: endpoint, defaultModel: model, extraBody: extraBody) {
+            Configuration(
+                endpoint: endpoint,
+                defaultModel: model,
+                extraBody: extraBody,
+                reasoningLevels: reasoningLevels
+            ) {
                 ["Authorization": "Bearer \(key)"]
             }
         }
@@ -144,6 +165,25 @@ public struct OpenAIChatClient: AgentClient {
 
     public func isAvailable() async -> Bool {
         configuration.endpoint != nil
+    }
+
+    public func availableReasoningLevels() async -> [AgentReasoningOption] {
+        configuration.reasoningLevels
+    }
+
+    /// `extraBody` plus this turn's reasoning effort.
+    ///
+    /// An effort the endpoint was not configured to accept is dropped rather
+    /// than forwarded: a stale selection left over from another client would
+    /// otherwise fail the whole request on a body field this endpoint has never
+    /// heard of.
+    func requestBody(for request: AgentSendRequest) -> [String: JSONValue] {
+        var body = configuration.extraBody
+        if let effort = request.effort,
+           configuration.reasoningLevels.contains(where: { $0.id == effort }) {
+            body[configuration.reasoningEffortKey] = .string(effort)
+        }
+        return body
     }
 
     // MARK: - Turn
@@ -200,6 +240,7 @@ public struct OpenAIChatClient: AgentClient {
         let tools = await surface.entries()
         let url = Self.completionsURL(for: endpoint)
         let headers = await configuration.headers()
+        let extraBody = requestBody(for: request)
 
         var messages = Self.seed(request)
         var totalUsage = UsageInfo()
@@ -223,7 +264,7 @@ public struct OpenAIChatClient: AgentClient {
                 endpoint: url,
                 headers: headers,
                 model: model,
-                extraBody: configuration.extraBody,
+                extraBody: extraBody,
                 stream: configuration.streaming,
                 session: session,
                 unaryTransport: configuration.unaryTransport

@@ -122,6 +122,101 @@ agent.select(.codex)   // same thread, Codex's own native session id
 A client joining a thread it has not seen gets a compact summary of what happened before
 (`sendsHandoffSummary`).
 
+## Reasoning effort
+
+Every agent has a dial for how hard the model thinks, and no two spell it the same way:
+Claude Code takes `--effort`, Codex a `model_reasoning_effort` config key, an
+OpenAI-compatible endpoint a `reasoning_effort` body field. The level names differ too —
+Codex has a `minimal` Claude does not, Claude an `xhigh` and `max` Codex does not.
+
+So reasoning is not an enum. A client **advertises** what it accepts and the SDK passes
+the chosen value straight back through `AgentSendRequest.effort`:
+
+```swift
+await agent.refreshClientOptions()      // also refreshes availableModels
+agent.availableReasoningLevels          // [low, medium, high, xhigh, max] for Claude Code
+agent.effort = "xhigh"                  // cleared on select(_:) — levels are per-provider
+```
+
+A host adding its own provider declares its own list, and the SDK needs to know nothing
+about the vocabulary:
+
+```swift
+ACPClient(
+    npx: "@zed-industries/some-agent",
+    displayName: "Some Agent",
+    effortEnvVar: "SOME_AGENT_THINKING",        // where the level is delivered
+    reasoningLevels: .levels("fast", "balanced", "thorough")
+)
+
+// Or with a rationale per level, which the picker surfaces as a tooltip:
+OpenAIChatClient(configuration: .apiKey(
+    key, endpoint: endpoint, model: "gpt-5",
+    reasoningLevels: .openAIReasoningEfforts
+))
+```
+
+`AgentReasoningPicker` renders the choice — in `AgentChatView`'s own header for free, or
+anywhere the host wants it:
+
+```swift
+AgentReasoningPicker(agent: agent)
+AgentModelPicker(agent: agent)
+```
+
+Both draw **nothing** when the active client advertises no options, which is the normal
+state for most ACP agents and for a gateway configured with one model.
+
+### Building your own picker
+
+The two pickers above are thin wrappers over a kit, and a host with its own chrome uses
+the kit directly. Three pieces: `AgentPickerItem` (a row), `AgentPickerStyle` (how the
+control looks), and `AgentPickerBuilder` (what it offers).
+
+```swift
+AgentPickerBuilder(style: .chip(icon: "sparkles"))
+    .label("Codex · GPT-5.5")                       // or .automaticLabel(), which joins
+    .models(catalog, selection: $model, title: "Model")
+    .thinkingLevels(.describing(levels), selection: $effort, title: "Thinking",
+                    defaultTitle: "Engine default")
+    .picker()
+```
+
+Items carry an id, a title and an optional line of rationale, so the source can be any
+catalogue — a host that discovers its models from a CLI is not asked to convert them into
+SDK types. `.describing(_:)` decorates discovered level ids with the built-in copy where
+they match and titlecases the rest, so a rediscovered list still reads like a curated one.
+
+An app whose menu already exists — nested engine submenus, app-specific rows — embeds
+just the rows instead of adopting a new control:
+
+```swift
+Menu {
+    myEngineRows
+    Divider()
+    Menu("Thinking") {
+        AgentPickerRows(items: .levels(levels), selection: $effort,
+                        defaultTitle: "Engine default")
+    }
+} label: { … }
+```
+
+Rows are buttons with a checkmark rather than a `Picker`: a `Picker`'s selection styling
+does not survive being dropped in beside unrelated rows. `nil` is always a real row —
+"Auto", "Default model", "Engine default" — because "whatever the engine does by default"
+is a choice a user makes deliberately.
+
+A control standing on its own usually wants two different words for that `nil`: the chip
+has to name the axis at rest, while the row has to say what clearing does.
+
+```swift
+AgentReasoningPicker(
+    levels: .describing(levels), selection: $effort,
+    defaultLabel: "Thinking",            // what the chip reads with nothing picked
+    defaultRowTitle: "Engine default"    // what the clearing row says
+)
+```
+
 ## In-process clients
 
 A CLI client delegates the hard part — deciding what to call and when — to an agent
