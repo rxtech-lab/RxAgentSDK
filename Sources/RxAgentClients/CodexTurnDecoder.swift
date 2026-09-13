@@ -287,7 +287,8 @@ actor CodexTurnDecoder {
             || item["server"] != nil
         guard looksLikeMCP else { return nil }
 
-        let tool = firstString(item, ["toolName", "tool_name", "name"]).flatMap { value -> String? in
+        // App-server's McpToolCallThreadItem uses `tool`; retain older aliases.
+        let tool = firstString(item, ["tool", "toolName", "tool_name", "name"]).flatMap { value -> String? in
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty, trimmed.lowercased() != "mcptoolcall" else { return nil }
             return trimmed
