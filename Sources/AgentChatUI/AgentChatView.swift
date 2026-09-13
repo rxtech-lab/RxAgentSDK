@@ -244,8 +244,9 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
     }
 
     private var isStreaming: Bool {
-        if case .streaming = agent.phase { return true }
-        return false
+        // Tool approval is part of the same live turn. Keep the activity row,
+        // scroll following and Stop control active until the turn finishes.
+        agent.phase.isBusy
     }
 
     private var items: [AgentTranscriptItem] {
