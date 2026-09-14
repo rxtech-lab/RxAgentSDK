@@ -1,7 +1,9 @@
 #if DEBUG
+import ImageIO
 import RxAgentContext
 import RxAgentCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Harness
 
@@ -274,5 +276,102 @@ private func sampleCall(
 #Preview("Composer / Streaming") {
     @Previewable @State var text = ""
     return AgentComposer(text: $text, isStreaming: true, onSend: {}, onStop: {})
+}
+
+// MARK: - Attachment previews
+
+/// Real PNG bytes, so the chip takes its thumbnail path instead of falling back
+/// to the document symbol — the fallback is the one shape that always looked
+/// small, and the thumbnail is what has to be checked.
+private func previewImageData(width: Int = 160, height: Int = 96, hue: Double = 0.58) -> Data {
+    guard let context = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { return Data() }
+
+    // A wide frame with an off-centre mark: enough to tell a cropped fill from a
+    // letterboxed fit at 16pt.
+    context.setFillColor(CGColor(red: hue, green: 0.42, blue: 1 - hue, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    context.setFillColor(CGColor(gray: 1, alpha: 0.9))
+    context.fillEllipse(in: CGRect(x: 16, y: 16, width: 56, height: 56))
+
+    guard let image = context.makeImage() else { return Data() }
+    let output = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(
+        output, UTType.png.identifier as CFString, 1, nil
+    ) else { return Data() }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { return Data() }
+    return output as Data
+}
+
+private let previewAttachments: [AgentAttachment] = [
+    AgentAttachment(kind: .image(previewImageData(), mimeType: "image/png"), label: "hello-world.png"),
+    AgentAttachment(
+        kind: .image(previewImageData(width: 96, height: 160, hue: 0.82), mimeType: "image/png"),
+        label: "Pasted image"
+    ),
+    .file(URL(filePath: "/tmp/demo/main.swift")),
+    .file(URL(filePath: "/tmp/demo/Sources/AgentChatUI")),
+    .file(URL(filePath: "/tmp/demo/a-rather-long-screenshot-file-name-2026-09-14.png")),
+]
+
+#Preview("Attachment chip") {
+    // Bare, on a plain ground: the capsule belongs to the composer row, so what
+    // this shows is the chip's own height — thumbnail, label, and nothing else.
+    VStack(alignment: .leading, spacing: 10) {
+        ForEach(previewAttachments) { attachment in
+            AgentAttachmentPreview(attachment: attachment)
+        }
+    }
+    .padding(20)
+    .frame(width: 320, alignment: .leading)
+}
+
+#Preview("Composer / Attachments") {
+    @Previewable @State var text = ""
+    @Previewable @State var attachments = previewAttachments
+    return VStack(spacing: 0) {
+        Divider()
+        AgentComposer(
+            text: $text,
+            attachments: attachments,
+            isStreaming: false,
+            onSend: {},
+            onStop: {},
+            onAddAttachments: { attachments.append(contentsOf: $0) },
+            onRemoveAttachment: { attachment in
+                attachments.removeAll { $0.id == attachment.id }
+            }
+        )
+    }
+    .frame(width: 420)
+}
+
+#Preview("Composer / Attachments (dark)") {
+    @Previewable @State var text = "Match this layout"
+    @Previewable @State var attachments = Array(previewAttachments.prefix(2))
+    return VStack(spacing: 0) {
+        Divider()
+        AgentComposer(
+            text: $text,
+            attachments: attachments,
+            isStreaming: false,
+            onSend: {},
+            onStop: {},
+            onAddAttachments: { attachments.append(contentsOf: $0) },
+            onRemoveAttachment: { attachment in
+                attachments.removeAll { $0.id == attachment.id }
+            }
+        )
+    }
+    .frame(width: 420)
+    .preferredColorScheme(.dark)
 }
 #endif

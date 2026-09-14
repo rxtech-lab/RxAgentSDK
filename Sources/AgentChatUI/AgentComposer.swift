@@ -323,13 +323,32 @@ public struct AgentComposer<Accessories: View>: View {
                             .accessibilityIdentifier("agent-remove-attachment-\(attachment.id)")
                         }
                     }
-                    .padding(.horizontal, 8)
+                    .fixedSize()
+                    .padding(.leading, 5)
+                    .padding(.trailing, 8)
                     .padding(.vertical, 4)
-                    .background(theme.toolChrome, in: .capsule)
+                    // Glass, like the field it sits on — but tinted and edged,
+                    // which untinted glass here cannot be. The chip rests on the
+                    // composer's own glass, so it has nothing but glass to
+                    // refract: plain `.regular` samples a backdrop identical to
+                    // its surroundings and vanishes. The tint gives it a body of
+                    // its own and the hairline gives it a rim, the same pairing
+                    // the field uses one layer down.
+                    //
+                    // No GlassEffectContainer around the row, tempting as the
+                    // cross-chip blending is: the container is opaque to
+                    // ViewInspector, and the remove button inside it stops being
+                    // reachable from the attachment tests.
+                    .glassEffect(.regular.tint(theme.toolChrome.opacity(0.8)), in: .capsule)
+                    .overlay {
+                        Capsule().strokeBorder(theme.toolBorder, lineWidth: 1)
+                    }
                 }
             }
             .padding(.horizontal, 2)
         }
+        // Chips slide rather than jump as one arrives or leaves.
+        .animation(.smooth(duration: 0.28), value: attachments.map(\.id))
     }
 
     // MARK: - Action button

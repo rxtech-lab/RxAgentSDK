@@ -99,18 +99,21 @@ public struct AgentAttachmentPreview: View {
     }
 
     public var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             if let thumbnail {
                 Image(decorative: thumbnail, scale: 1)
-                    .resizable().scaledToFit()
-                    .frame(width: 56, height: 56)
-                    .background(.black.opacity(0.1), in: .rect(cornerRadius: 6))
-                    .clipShape(.rect(cornerRadius: 6))
+                    .resizable().scaledToFill()
+                    .frame(width: 16, height: 16)
+                    .clipShape(.rect(cornerRadius: 3))
             } else {
                 Image(systemName: fileSymbol)
+                    .font(.system(size: 11))
             }
             Text(attachment.label ?? "Attachment")
-                .font(.caption).lineLimit(1)
+                .font(.caption).lineLimit(1).truncationMode(.middle)
+                // Capped rather than stretched: a long file name truncates at
+                // 160pt, a short one leaves the chip as narrow as its label.
+                .frame(maxWidth: 160, alignment: .leading)
         }
         .foregroundStyle(theme.assistantText)
         .accessibilityElement(children: .combine)
