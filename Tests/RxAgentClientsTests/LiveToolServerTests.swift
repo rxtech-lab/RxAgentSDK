@@ -79,5 +79,52 @@ struct LiveToolServerTests {
         )
         #expect(reducer.messages.map(\.plainText).joined().contains("4173"))
     }
+
+    @Test("Codex calls a Swift tool over the local MCP server", .timeLimit(.minutes(3)))
+    func codexCallsSwiftTool() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "rxagent-tools-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let threadID = AgentThreadID()
+        let toolServer = LocalToolServer()
+        let handle = try #require(await toolServer.publish(
+            tools: [.tool(LuckyNumberTool())],
+            for: threadID,
+            context: AgentToolContext(threadID: threadID, workingDirectory: directory)
+        ))
+        defer { Task { await toolServer.stop() } }
+
+        let client = CodexClient()
+        let request = AgentSendRequest(
+            threadID: threadID,
+            prompt: """
+            Use the lucky_number tool to look up Ada's lucky number, \
+            then reply with just that number.
+            """,
+            workingDirectory: directory,
+            permissionMode: .bypassPermissions,
+            toolServer: handle,
+            permissions: AllowAllPermissions()
+        )
+
+        var reducer = TranscriptReducer()
+        for await event in client.send(request) {
+            if case .failed(let error) = event { Issue.record("turn failed: \(error)") }
+            _ = reducer.apply(event)
+        }
+
+        let calls = reducer.messages.flatMap(\.toolCalls)
+        #expect(
+            calls.contains { $0.name.contains("lucky_number") },
+            "expected the agent to call our tool; saw \(calls.map(\.name))"
+        )
+        #expect(
+            calls.contains { $0.result?.contains("4173") == true },
+            "the tool's return value should come back as the tool result"
+        )
+        #expect(reducer.messages.map(\.plainText).joined().contains("4173"))
+    }
 }
 #endif

@@ -20,5 +20,18 @@ struct CodexLaunchTests {
         ])
         #expect(CodexClient().launchArguments() == ["app-server", "--listen", "stdio://"])
     }
+
+    @Test("Loopback MCP traffic bypasses the system proxy")
+    func loopbackBypassesProxy() {
+        var fresh: [String: String] = [:]
+        CodexClient.bypassProxyForLoopback(&fresh)
+        #expect(fresh["NO_PROXY"] == "127.0.0.1,localhost,::1")
+        #expect(fresh["no_proxy"] == fresh["NO_PROXY"])
+
+        var existing = ["no_proxy": "corp.internal, localhost"]
+        CodexClient.bypassProxyForLoopback(&existing)
+        #expect(existing["NO_PROXY"] == "corp.internal,localhost,127.0.0.1,::1")
+        #expect(existing["no_proxy"] == existing["NO_PROXY"])
+    }
 }
 #endif
