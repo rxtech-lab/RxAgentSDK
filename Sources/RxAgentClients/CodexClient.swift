@@ -111,6 +111,7 @@ public struct CodexClient: AgentClient {
         var environment = await ShellEnvironment.shared.environment()
         environment.merge(environmentOverrides) { _, new in new }
         environment.merge(mcp.environment) { _, new in new }
+        Self.bypassProxyForLoopback(&environment)
         let process: ManagedProcess
         do {
             process = try ManagedProcess.launch(
@@ -216,6 +217,26 @@ public struct CodexClient: AgentClient {
         // this process still owns the native thread's persistence writer.
         _ = await process.waitForExit()
         continuation.finish()
+    }
+
+    /// Keeps the local tool server's `127.0.0.1` URL off any HTTP proxy.
+    ///
+    /// Codex's MCP client (reqwest) honours the macOS *system* proxy but not its
+    /// exception list, so with Surge/ClashX enabled the loopback request goes to
+    /// the proxy, which answers `503 Connection Closed` and the tool server never
+    /// connects. `NO_PROXY` is the one knob reqwest checks for system proxies too.
+    /// Existing entries are kept; both spellings are set because tools disagree
+    /// on which one they read.
+    static func bypassProxyForLoopback(_ environment: inout [String: String]) {
+        let loopback = ["127.0.0.1", "localhost", "::1"]
+        let existing = (environment["NO_PROXY"] ?? environment["no_proxy"] ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let merged = (existing + loopback.filter { !existing.contains($0) })
+            .joined(separator: ",")
+        environment["NO_PROXY"] = merged
+        environment["no_proxy"] = merged
     }
 
     // MARK: - Params
