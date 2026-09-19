@@ -13,6 +13,7 @@ public struct ClaudeCodeClient: AgentClient {
 
     /// Tools pre-approved via `--allowedTools`, so internal agent mechanics
     /// (Read/Grep/Task) don't each cost an approval round trip.
+    @available(*, deprecated, message: "Use [String].claudeReadOnlyTools() or .claudeDefaultTools()")
     public static let defaultSafeTools = [
         "Read", "Glob", "Grep", "LS",
         "TodoRead", "TodoWrite",
@@ -35,7 +36,7 @@ public struct ClaudeCodeClient: AgentClient {
         binaryPath: String? = nil,
         extraArguments: [String] = [],
         environment: [String: String] = [:],
-        preapprovedTools: [String] = ClaudeCodeClient.defaultSafeTools,
+        preapprovedTools: [String] = .claudeDefaultTools(),
         reasoningLevels: [AgentReasoningOption] = .claudeCodeEfforts,
         capabilities: AgentCapabilities = .claudeCodeDefaults
     ) {
