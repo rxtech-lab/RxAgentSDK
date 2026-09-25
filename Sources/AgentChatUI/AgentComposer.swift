@@ -35,6 +35,7 @@ public struct AgentComposer<Accessories: View>: View {
     private let onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)?
     private let onRemoveAttachment: ((AgentAttachment) -> Void)?
     private let onRemoveQueuedTurn: ((UUID) -> Void)?
+    private let onSendQueuedTurnNow: ((UUID) -> Void)?
     private let onMergeQueuedTurns: (() -> Void)?
     private let onDropFiles: (@MainActor ([URL]) -> Bool)?
     private let accessories: Accessories
@@ -63,6 +64,7 @@ public struct AgentComposer<Accessories: View>: View {
         onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)? = nil,
         onRemoveAttachment: ((AgentAttachment) -> Void)? = nil,
         onRemoveQueuedTurn: ((UUID) -> Void)? = nil,
+        onSendQueuedTurnNow: ((UUID) -> Void)? = nil,
         onMergeQueuedTurns: (() -> Void)? = nil,
         onDropFiles: (@MainActor ([URL]) -> Bool)? = nil,
         @ViewBuilder accessories: () -> Accessories
@@ -79,6 +81,7 @@ public struct AgentComposer<Accessories: View>: View {
         self.onAddAttachments = onAddAttachments
         self.onRemoveAttachment = onRemoveAttachment
         self.onRemoveQueuedTurn = onRemoveQueuedTurn
+        self.onSendQueuedTurnNow = onSendQueuedTurnNow
         self.onMergeQueuedTurns = onMergeQueuedTurns
         self.onDropFiles = onDropFiles
         self.accessories = accessories()
@@ -285,6 +288,17 @@ public struct AgentComposer<Accessories: View>: View {
                         .font(.caption)
                         .lineLimit(2)
                     Spacer(minLength: 0)
+                    if let onSendQueuedTurnNow {
+                        Button {
+                            onSendQueuedTurnNow(turn.id)
+                        } label: {
+                            Image(systemName: "arrow.up.circle").font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(theme.accent)
+                        .help("Send now")
+                        .accessibilityLabel("Send now")
+                    }
                     if let onRemoveQueuedTurn {
                         Button {
                             onRemoveQueuedTurn(turn.id)
@@ -537,6 +551,7 @@ public extension AgentComposer where Accessories == EmptyView {
         onAddAttachments: (@MainActor ([AgentAttachment]) -> Void)? = nil,
         onRemoveAttachment: ((AgentAttachment) -> Void)? = nil,
         onRemoveQueuedTurn: ((UUID) -> Void)? = nil,
+        onSendQueuedTurnNow: ((UUID) -> Void)? = nil,
         onMergeQueuedTurns: (() -> Void)? = nil,
         onDropFiles: (@MainActor ([URL]) -> Bool)? = nil
     ) {
@@ -553,6 +568,7 @@ public extension AgentComposer where Accessories == EmptyView {
             onAddAttachments: onAddAttachments,
             onRemoveAttachment: onRemoveAttachment,
             onRemoveQueuedTurn: onRemoveQueuedTurn,
+            onSendQueuedTurnNow: onSendQueuedTurnNow,
             onMergeQueuedTurns: onMergeQueuedTurns,
             onDropFiles: onDropFiles,
             accessories: { EmptyView() }

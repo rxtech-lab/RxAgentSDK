@@ -22,6 +22,9 @@ struct ClaudeWireDecoder: Sendable {
 
     var sessionID: String? { capturedSessionID }
 
+    /// How many user messages written to stdin the CLI has echoed back.
+    private(set) var replayedUserMessages = 0
+
     mutating func decode(line: String) -> [AgentEvent] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let frame = JSONValue(jsonString: trimmed) else { return [] }
@@ -135,7 +138,14 @@ struct ClaudeWireDecoder: Sendable {
 
     // MARK: - user (tool results)
 
-    private func decodeUser(_ frame: JSONValue) -> [AgentEvent] {
+    private mutating func decodeUser(_ frame: JSONValue) -> [AgentEvent] {
+        // `--replay-user-messages` echoes each prompt back once the CLI has
+        // taken it in. The transcript already has it; the count is what tells
+        // the client whether a steer is still waiting to be read.
+        if frame["isReplay"]?.boolValue == true {
+            replayedUserMessages += 1
+            return []
+        }
         let content = frame["message"]?["content"]
         guard let blocks = content?.arrayValue else { return [] }
 

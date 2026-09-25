@@ -112,11 +112,21 @@ actor CodexTurnDecoder {
     // MARK: - Turn completion
 
     /// Suspends until `turn/completed` / `turn/failed` arrives, or until
-    /// ``signalTurnEnd()`` is called because the child process died.
+    /// ``signalTurnEnd()`` is called because the child process died — or until
+    /// the calling task is cancelled, so a stopped turn unwinds instead of
+    /// waiting on a child that is still happily working.
     func waitForTurnEnd() async {
-        if turnHasEnded { return }
-        await withCheckedContinuation { continuation in
-            turnEndWaiters.append(continuation)
+        if turnHasEnded || Task.isCancelled { return }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if turnHasEnded || Task.isCancelled {
+                    continuation.resume()
+                } else {
+                    turnEndWaiters.append(continuation)
+                }
+            }
+        } onCancel: {
+            Task { await self.signalTurnEnd() }
         }
     }
 

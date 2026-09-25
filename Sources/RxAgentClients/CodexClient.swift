@@ -97,6 +97,10 @@ public struct CodexClient: AgentClient {
             continuation.finish()
             return
         }
+        // A stop that lands before the child exists has nothing to signal, so
+        // every await up to registration has to check for it — otherwise the
+        // turn launches anyway and runs unseen.
+        guard !Task.isCancelled else { return finishCancelled(continuation) }
 
         let mcp = MCPConfigRenderer.codexConfiguration(
             servers: request.mcpServers,
@@ -112,6 +116,7 @@ public struct CodexClient: AgentClient {
         environment.merge(environmentOverrides) { _, new in new }
         environment.merge(mcp.environment) { _, new in new }
         Self.bypassProxyForLoopback(&environment)
+        guard !Task.isCancelled else { return finishCancelled(continuation) }
         let process: ManagedProcess
         do {
             process = try ManagedProcess.launch(
@@ -126,7 +131,13 @@ public struct CodexClient: AgentClient {
             return
         }
 
-        await runtime.register(turnID: request.turnID, process: process)
+        guard await runtime.register(turnID: request.turnID, process: process),
+              !Task.isCancelled
+        else {
+            await process.terminate()
+            _ = await process.waitForExit()
+            return finishCancelled(continuation)
+        }
         defer { Task { await runtime.remove(turnID: request.turnID) } }
 
         let decoder = CodexTurnDecoder(
@@ -196,7 +207,11 @@ public struct CodexClient: AgentClient {
             await decoder.waitForTurnEnd()
             exitWatcher.cancel()
 
-            await decoder.finishTurn(threadID: threadID)
+            if Task.isCancelled {
+                continuation.yield(.failed(.cancelled))
+            } else {
+                await decoder.finishTurn(threadID: threadID)
+            }
         } catch {
             if Task.isCancelled {
                 continuation.yield(.failed(.cancelled))
@@ -237,6 +252,11 @@ public struct CodexClient: AgentClient {
             .joined(separator: ",")
         environment["NO_PROXY"] = merged
         environment["no_proxy"] = merged
+    }
+
+    private func finishCancelled(_ continuation: AsyncStream<AgentEvent>.Continuation) {
+        continuation.yield(.failed(.cancelled))
+        continuation.finish()
     }
 
     // MARK: - Params
@@ -375,13 +395,32 @@ public struct CodexClient: AgentClient {
 
 actor CodexRuntime {
     private var processes: [UUID: ManagedProcess] = [:]
+    /// Turns stopped before their child registered. Without these a cancel
+    /// that arrives during launch finds nothing to signal and is simply lost.
+    private var cancelled: Set<UUID> = []
 
-    func register(turnID: UUID, process: ManagedProcess) { processes[turnID] = process }
-    func remove(turnID: UUID) { processes.removeValue(forKey: turnID) }
+    /// Returns false when the turn was already cancelled; the caller must then
+    /// tear the process down itself.
+    func register(turnID: UUID, process: ManagedProcess) -> Bool {
+        if cancelled.remove(turnID) != nil { return false }
+        processes[turnID] = process
+        return true
+    }
 
+    func remove(turnID: UUID) {
+        processes.removeValue(forKey: turnID)
+        cancelled.remove(turnID)
+    }
+
+    /// Interrupts the turn's child and waits for it to actually exit, so the
+    /// caller knows the next turn can safely resume the same native thread.
     func cancel(turnID: UUID) async {
-        guard let process = processes.removeValue(forKey: turnID) else { return }
+        guard let process = processes.removeValue(forKey: turnID) else {
+            cancelled.insert(turnID)
+            return
+        }
         await process.interrupt()
+        _ = await process.waitForExit()
     }
 }
 #endif

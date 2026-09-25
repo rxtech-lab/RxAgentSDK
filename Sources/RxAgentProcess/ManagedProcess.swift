@@ -235,9 +235,12 @@ public actor ManagedProcess {
 
         ProcessSpawner.signal(first, pgid: pid, escapees: allKnownDescendants())
 
-        Task { [weak self] in
+        // Strong on purpose: the caller usually drops its last reference right
+        // after signalling, and a weak capture would let the SIGKILL fallback
+        // silently vanish — leaving a child that ignored the first signal, and
+        // just saw stdin close, free to finish its turn in the background.
+        Task {
             try? await Task.sleep(for: .seconds(graceSeconds))
-            guard let self else { return }
             // Re-snapshot: this catches anything that appeared during the grace
             // window, and by now the root may be reaped — the accumulated set is
             // the only way to reach session-escaped, reparented children.

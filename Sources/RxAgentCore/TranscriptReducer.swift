@@ -43,8 +43,13 @@ public struct TranscriptReducer: Sendable {
 
     /// Append a locally-authored message (the user's prompt) before the turn starts.
     public mutating func append(_ message: AgentMessage) -> [TranscriptChange] {
+        // A user message landing mid-stream (steering) splits the answer: the
+        // reply to it has to open a fresh assistant message *after* it rather
+        // than keep writing into the one above.
+        var changes = message.role == .user ? closeActiveMessage() : []
         messages.append(message)
-        return [.appended(messageIndex: messages.count - 1)]
+        changes.append(.appended(messageIndex: messages.count - 1))
+        return changes
     }
 
     public mutating func reset() -> [TranscriptChange] {

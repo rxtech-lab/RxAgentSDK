@@ -115,6 +115,28 @@ struct ManagedProcessTests {
         let code = await process.waitForExit()
         #expect(code != 0)
     }
+
+    @Test("SIGKILL still follows when the caller drops the process right after interrupting")
+    func escalationSurvivesRelease() async throws {
+        // Ignored signals survive exec, so neither the shell nor `sleep` will
+        // die of the SIGINT — only the SIGKILL fallback can end it.
+        var process: ManagedProcess? = try ManagedProcess.launch(
+            executable: "/bin/sh",
+            arguments: ["-c", "trap '' INT; sleep 30"],
+            environment: ProcessInfo.processInfo.environment,
+            workingDirectory: "/tmp"
+        )
+        let pid = await process!.pid
+        try? await Task.sleep(for: .milliseconds(100))
+        await process?.interrupt(graceSeconds: 0.2)
+        process = nil
+
+        let deadline = ContinuousClock.now + .seconds(3)
+        while kill(pid, 0) == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(kill(pid, 0) != 0)
+    }
 }
 
 @Suite("ShellEnvironment")

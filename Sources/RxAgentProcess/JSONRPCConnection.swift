@@ -80,15 +80,29 @@ public actor JSONRPCConnection {
         ]
         if let params { payload["params"] = params }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
-            do {
-                try process.write(jsonLine: JSONValue.object(payload).anyValue)
-            } catch {
-                pending.removeValue(forKey: id)
-                continuation.resume(throwing: error)
+        // A cancelled caller must not hang on a reply that may never come — the
+        // child is usually being killed at the same moment.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                pending[id] = continuation
+                do {
+                    try process.write(jsonLine: JSONValue.object(payload).anyValue)
+                } catch {
+                    pending.removeValue(forKey: id)
+                    continuation.resume(throwing: error)
+                }
             }
+        } onCancel: {
+            Task { await self.failPending(id: id, with: CancellationError()) }
         }
+    }
+
+    private func failPending(id: Int, with error: Error) {
+        pending.removeValue(forKey: id)?.resume(throwing: error)
     }
 
     public func notify(_ method: String, params: JSONValue? = nil) throws {

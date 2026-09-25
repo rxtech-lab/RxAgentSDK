@@ -134,7 +134,17 @@ public struct ClaudeCodeClient: AgentClient {
             return
         }
 
-        await runtime.register(turnID: request.turnID, process: process)
+        // A stop that landed while the child was launching found nothing to
+        // signal; honour it here, before the prompt is ever written.
+        guard await runtime.register(turnID: request.turnID, process: process),
+              !Task.isCancelled
+        else {
+            await runtime.remove(turnID: request.turnID)
+            await process.terminate()
+            continuation.yield(.failed(.cancelled))
+            continuation.finish()
+            return
+        }
 
         // The prompt is *not* an argument. With `--input-format stream-json` it
         // goes over stdin as a JSON user message, so stdin has to stay open.
@@ -329,18 +339,32 @@ public struct ClaudeCodeClient: AgentClient {
 /// conformers stay value types.
 actor ClaudeRuntime {
     private var processes: [UUID: ManagedProcess] = [:]
+    /// Turns stopped before their child registered. Without these a cancel
+    /// that arrives during launch finds nothing to signal and is simply lost.
+    private var cancelled: Set<UUID> = []
 
-    func register(turnID: UUID, process: ManagedProcess) {
+    /// Returns false when the turn was already cancelled; the caller must then
+    /// tear the process down itself.
+    func register(turnID: UUID, process: ManagedProcess) -> Bool {
+        if cancelled.remove(turnID) != nil { return false }
         processes[turnID] = process
+        return true
     }
 
     func remove(turnID: UUID) {
         processes.removeValue(forKey: turnID)
+        cancelled.remove(turnID)
     }
 
+    /// Interrupts the turn's child and waits for it to actually exit, so a
+    /// following `--resume` never shares the session with a dying process.
     func cancel(turnID: UUID) async {
-        guard let process = processes.removeValue(forKey: turnID) else { return }
+        guard let process = processes.removeValue(forKey: turnID) else {
+            cancelled.insert(turnID)
+            return
+        }
         await process.interrupt()
+        _ = await process.waitForExit()
     }
 }
 #endif
