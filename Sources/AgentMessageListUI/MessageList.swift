@@ -50,6 +50,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
     private let rowContent: (Message) -> RowContent
 
     @State private var anchor = MessageListScrollAnchor()
+    @State private var geometryUpdates = MessageListGeometryUpdates()
     @State private var pinning = MessageListPinningController<Message.ID>()
     @State private var scrollPhase: ScrollPhase = .idle
     @State private var scrollViewHeight: CGFloat = 0
@@ -158,7 +159,10 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                     visibleMaxY: geometry.visibleRect.maxY
                 )
             } action: { _, metrics in
-                handleScrollMetrics(metrics, proxy: proxy)
+                let isUserDriven = isUserDrivenScroll
+                geometryUpdates.scheduleMetrics(isUserDriven: isUserDriven) {
+                    handleScrollMetrics(metrics, isUserDriven: isUserDriven, proxy: proxy)
+                }
             }
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentOffset.y
@@ -168,7 +172,11 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                       canReleasePinnedUserMessageByScroll,
                       offsetY > oldOffsetY + MessageListConstants.userScrollDownDelta
                 else { return }
-                releasePinnedUserMessage(proxy: proxy)
+                geometryUpdates.schedulePinRelease {
+                    guard pinning.isPinningUserMessage,
+                          canReleasePinnedUserMessageByScroll else { return }
+                    releasePinnedUserMessage(proxy: proxy)
+                }
             }
             .onScrollPhaseChange { _, phase in
                 scrollPhase = phase
@@ -216,6 +224,9 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
             }
             .onChange(of: messageListChangeToken) { oldToken, newToken in
                 handleMessageListChange(oldToken: oldToken, newToken: newToken, proxy: proxy)
+            }
+            .onDisappear {
+                geometryUpdates.cancel()
             }
         }
     }
@@ -353,33 +364,37 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         )
     }
 
-    private func handleScrollMetrics(_ metrics: MessageListScrollMetrics, proxy: ScrollViewProxy) {
+    private func handleScrollMetrics(
+        _ metrics: MessageListScrollMetrics,
+        isUserDriven: Bool,
+        proxy: ScrollViewProxy
+    ) {
         let decision = anchor.apply(
             contentHeight: metrics.contentHeight,
             visibleMaxY: metrics.visibleMaxY,
-            isUserDriven: isUserDrivenScroll
+            isUserDriven: isUserDriven
         )
         updateIsAtBottomBinding(anchor.isNearBottom)
 
-        if shouldReleasePinnedUserMessageForFilledTurn, !isUserDrivenScroll {
+        if shouldReleasePinnedUserMessageForFilledTurn, !isUserDriven {
             releasePinnedUserMessage(proxy: proxy)
         }
 
         if decision == .scrollToBottom,
            isAtBottom,
            isStreaming,
-           !isUserDrivenScroll,
+           !isUserDriven,
            !pinning.isPinningUserMessage {
             scheduleScrollToBottom(proxy: proxy)
         }
 
-        if isUserDrivenScroll, metrics.visibleMinY <= MessageListConstants.loadThreshold {
+        if isUserDriven, metrics.visibleMinY <= MessageListConstants.loadThreshold {
             triggerLoadPreviousIfNeeded(contentHeight: metrics.contentHeight)
         } else if metrics.visibleMinY > MessageListConstants.loadThreshold {
             previousLoadContentHeight = nil
         }
 
-        if isUserDrivenScroll, metrics.contentHeight - metrics.visibleMaxY <= MessageListConstants.loadThreshold {
+        if isUserDriven, metrics.contentHeight - metrics.visibleMaxY <= MessageListConstants.loadThreshold {
             triggerLoadNextIfNeeded(contentHeight: metrics.contentHeight)
         } else if metrics.contentHeight - metrics.visibleMaxY > MessageListConstants.loadThreshold {
             nextLoadContentHeight = nil
@@ -610,6 +625,61 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                 onLoadError(.next, error)
             }
         }
+    }
+}
+
+/// Keep scroll geometry callbacks read-only during SwiftUI's layout pass.
+/// Keep the last user-driven sample as well as the latest sample, so an idle
+/// layout update in the same frame cannot hide a quick deliberate scroll.
+@MainActor
+final class MessageListGeometryUpdates {
+    private var metricsUpdate: (() -> Void)?
+    private var userDrivenMetricsUpdate: (() -> Void)?
+    private var latestMetricsWasUserDriven = false
+    private var metricsTask: Task<Void, Never>?
+    private var pinReleaseUpdate: (() -> Void)?
+    private var pinReleaseTask: Task<Void, Never>?
+
+    func scheduleMetrics(isUserDriven: Bool, _ update: @escaping () -> Void) {
+        metricsUpdate = update
+        latestMetricsWasUserDriven = isUserDriven
+        if isUserDriven { userDrivenMetricsUpdate = update }
+        guard metricsTask == nil else { return }
+        metricsTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            metricsTask = nil
+            let userDrivenUpdate = userDrivenMetricsUpdate
+            let latestUpdate = metricsUpdate
+            let latestWasUserDriven = latestMetricsWasUserDriven
+            metricsUpdate = nil
+            userDrivenMetricsUpdate = nil
+            userDrivenUpdate?()
+            if !latestWasUserDriven { latestUpdate?() }
+        }
+    }
+
+    func schedulePinRelease(_ update: @escaping () -> Void) {
+        pinReleaseUpdate = update
+        guard pinReleaseTask == nil else { return }
+        pinReleaseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            pinReleaseTask = nil
+            let update = pinReleaseUpdate
+            pinReleaseUpdate = nil
+            update?()
+        }
+    }
+
+    func cancel() {
+        metricsTask?.cancel()
+        metricsTask = nil
+        metricsUpdate = nil
+        userDrivenMetricsUpdate = nil
+        pinReleaseTask?.cancel()
+        pinReleaseTask = nil
+        pinReleaseUpdate = nil
     }
 }
 
