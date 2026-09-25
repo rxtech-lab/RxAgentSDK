@@ -203,7 +203,7 @@ public struct AgentComposer<Accessories: View>: View {
             handlers: AgentTextInputHandlers(onReturn: handleReturn)
         )
         .font(.system(size: 14))
-        .lineLimit(theme.composerLines, reservesSpace: true)
+        .lineLimit(theme.composerLines)
         .accessibilityIdentifier("agent-composer-field")
         #endif
     }

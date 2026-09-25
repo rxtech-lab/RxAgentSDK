@@ -1,0 +1,57 @@
+name: Tests
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+
+jobs:
+  test-macos:
+    name: swift test (macOS)
+    runs-on: [self-hosted, regular]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Run tests
+        # No xcpretty: it doesn't understand swift-testing's output and
+        # the non-ASCII record marker (􁁛) crashes xcpretty 0.4.1 on Ruby 4.
+        run: swift test
+
+  build-ios:
+    name: xcodebuild build (iOS)
+    runs-on: [self-hosted, regular]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install xcpretty
+        run: gem install xcpretty
+
+      # `swift test` only ever compiles the macOS side, so the `#else`
+      # branches of every `#if os(macOS)` went unbuilt until a consumer
+      # picked the package up. Build them here instead.
+      - name: Build for iOS
+        run: |
+          set -o pipefail && xcodebuild \
+            -scheme RxAgentSDK \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build | xcpretty
