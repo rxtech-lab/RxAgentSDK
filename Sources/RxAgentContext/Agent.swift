@@ -122,6 +122,13 @@ public final class Agent {
 
     @ObservationIgnored private var currentTurn: Task<Void, Never>?
     @ObservationIgnored private var currentTurnID: UUID?
+    /// The previous turn's client-side teardown, still in flight after a stop.
+    ///
+    /// ``stop()`` flips the phase to idle at once so the UI answers, but the
+    /// child process it interrupted can take seconds to die. The next turn
+    /// waits on this before it starts, so two turns never run against the same
+    /// session — and never edit the same files — at once.
+    @ObservationIgnored private var teardown: Task<Void, Never>?
     /// Supplied by the host once a tool server is running. Nil means local tools
     /// are declared but not reachable.
     @ObservationIgnored public var toolServer: LocalToolServerHandle?
@@ -241,6 +248,42 @@ public final class Agent {
         queuedTurns.removeAll()
     }
 
+    /// Delivers a queued turn now instead of after the running turn finishes.
+    ///
+    /// Clients that can steer (Claude Code, Codex) get it as extra input to the
+    /// turn in progress, so the agent keeps its work and simply reads the new
+    /// message. Clients that can't are interrupted and the message starts as a
+    /// fresh turn; the rest of the queue survives either way.
+    public func sendQueuedTurnNow(id: UUID) {
+        guard let index = queuedTurns.firstIndex(where: { $0.id == id }) else { return }
+        let turn = queuedTurns.remove(at: index)
+        guard phase.isBusy, let turnID = currentTurnID else {
+            send(turn.text, attachments: turn.attachments)
+            return
+        }
+        let client = activeClient
+        Task { [weak self] in
+            let steered = await client.steer(
+                turn: turnID,
+                prompt: turn.text,
+                attachments: turn.attachments
+            )
+            guard let self else { return }
+            if steered {
+                self.thread.appendUserMessage(turn.text, attachments: turn.attachments)
+                return
+            }
+            if self.currentTurnID == turnID { self.interruptCurrentTurn() }
+            if self.phase.isBusy {
+                // A drained turn started while we were asking; this one is
+                // still the most urgent, so it goes first in line.
+                self.queuedTurns.insert(turn, at: 0)
+            } else {
+                self.send(turn.text, attachments: turn.attachments)
+            }
+        }
+    }
+
     /// Starts the next queued turn, if the thread is free and one is waiting.
     private func drainQueue() {
         guard !phase.isBusy, lastError == nil, !queuedTurns.isEmpty else { return }
@@ -276,12 +319,19 @@ public final class Agent {
         // Build handoff context before appending, so the new prompt appears once.
         thread.appendUserMessage(trimmed, attachments: attachments)
 
+        let previousTeardown = teardown
         currentTurn = Task { [weak self] in
-            for await event in client.send(request) {
-                guard let self, !Task.isCancelled else { break }
-                self.handle(event, from: client.id)
+            await previousTeardown?.value
+            if !Task.isCancelled {
+                for await event in client.send(request) {
+                    guard let self, !Task.isCancelled else { break }
+                    self.handle(event, from: client.id)
+                }
             }
-            guard let self else { return }
+            // A stopped turn has already been handed off: by the time it gets
+            // here a newer turn may own the phase and the handles, and clearing
+            // them would leave that turn running with nothing left to stop it.
+            guard let self, !Task.isCancelled, self.currentTurnID == turnID else { return }
             if case .streaming(let active) = self.phase, active == turnID {
                 self.phase = .idle
             }
@@ -316,19 +366,29 @@ public final class Agent {
         // Stop means stop: a queue drained after a cancel would restart the very
         // work the user just interrupted.
         queuedTurns.removeAll()
+        interruptCurrentTurn()
+    }
+
+    /// Cancels the running turn without touching the queue.
+    private func interruptCurrentTurn() {
         guard let turnID = currentTurnID else { return }
         let client = activeClient
         currentTurn?.cancel()
         currentTurn = nil
         currentTurnID = nil
         phase = .idle
-        Task { await client.cancel(turn: turnID) }
+        let previous = teardown
+        teardown = Task {
+            await previous?.value
+            await client.cancel(turn: turnID)
+        }
     }
 
     /// Release long-lived child processes. `deinit` can't be async, so an
     /// explicit call is required — ACP agents keep a process alive per thread.
     public func shutdown() async {
         stop()
+        await teardown?.value
         for client in clients {
             await client.endSession(thread: thread.id)
         }

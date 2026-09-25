@@ -183,6 +183,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
                     agent.draftAttachments.removeAll { $0.id == attachment.id }
                 },
                 onRemoveQueuedTurn: { agent.removeQueuedTurn(id: $0) },
+                onSendQueuedTurnNow: { agent.sendQueuedTurnNow(id: $0) },
                 onMergeQueuedTurns: { agent.mergeQueuedTurns() },
                 onDropFiles: onDropFiles,
                 accessories: { accessories }

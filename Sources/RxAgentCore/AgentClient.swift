@@ -244,6 +244,12 @@ public protocol AgentClient: Sendable {
     /// or `.failed(.cancelled)`.
     func cancel(turn: UUID) async
 
+    /// Delivers extra user input to a turn that is still running, without
+    /// cancelling it. Returns `false` when the client can't steer, or when the
+    /// turn is no longer accepting input; the caller should then fall back to
+    /// sending the input as its own turn.
+    func steer(turn: UUID, prompt: String, attachments: [AgentAttachment]) async -> Bool
+
     /// Release any long-lived resources held for this thread (ACP keeps a child
     /// process alive across turns; the others are no-ops).
     func endSession(thread: AgentThreadID) async
@@ -254,4 +260,5 @@ public extension AgentClient {
     func availableModels() async -> [AgentModelOption] { [] }
     func availableReasoningLevels() async -> [AgentReasoningOption] { [] }
     func endSession(thread: AgentThreadID) async {}
+    func steer(turn: UUID, prompt: String, attachments: [AgentAttachment]) async -> Bool { false }
 }
