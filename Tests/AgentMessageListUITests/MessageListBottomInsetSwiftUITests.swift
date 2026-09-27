@@ -1,7 +1,6 @@
 #if os(macOS)
 import SwiftUI
 import Testing
-import ViewInspector
 @testable import AgentMessageListUI
 
 /// A floating composer sits over the bottom of the list, and `bottomInset` is
@@ -10,7 +9,7 @@ import ViewInspector
 /// otherwise every new turn starts pushed off the top of the viewport by exactly
 /// the height of the composer.
 @MainActor
-@Suite("MessageList bottom inset")
+@Suite("MessageList bottom inset", .serialized)
 struct MessageListBottomInsetSwiftUITests {
 
     @Test(
@@ -19,37 +18,46 @@ struct MessageListBottomInsetSwiftUITests {
     )
     func pinnedTurnRestsAtTopRegardlessOfInset(inset: CGFloat) async throws {
         let model = BottomInsetModel(bottomInset: inset)
-        let view = BottomInsetHarness(model: model)
-
-        ViewHosting.host(
-            view: view,
-            size: CGSize(width: 260, height: 240),
-            function: "\(#function)-\(inset)"
-        )
-        defer { ViewHosting.expel(function: "\(#function)-\(inset)") }
+        let host = MessageListTestHost(size: CGSize(width: 260, height: 240)) {
+            BottomInsetHarness(model: model)
+        }
+        defer { host.close() }
 
         model.messages = [.init(text: "user", isUserMessage: true, height: 44)]
         try await Task.sleep(for: .milliseconds(600))
 
-        // ~`minimumPinnedTailSpacing` from the top, with or without the inset.
-        // Bounded on BOTH sides: if the inset stacked on top of the reserved
-        // spacing instead of coming out of it, the message would be scrolled off
-        // the top and this would land at roughly -inset.
-        let minY = try #require(model.userMinY)
-        #expect(
-            minY >= -1 && minY < 40,
-            "pinned message sat at y=\(minY) with a \(inset)pt inset"
-        )
+        // Near the top, with or without the inset. Bounded on BOTH sides: if the
+        // inset stacked on top of the reserved spacing instead of coming out of
+        // it, the message would be scrolled off the top.
+        let minY = try #require(host.rowFrame(at: 0)?.minY)
+        #expect(minY >= -1 && minY < 40, "pinned message sat at y=\(minY) with a \(inset)pt inset")
+    }
+
+    @Test("A pinned turn under older history rests at the top of the viewport")
+    func pinnedTurnUnderHistoryRestsAtTop() async throws {
+        let model = BottomInsetModel(bottomInset: 60)
+        let host = MessageListTestHost(size: CGSize(width: 260, height: 240)) {
+            BottomInsetHarness(model: model)
+        }
+        defer { host.close() }
+
+        model.messages = (0..<6).map { .init(text: "old \($0)", isUserMessage: false, height: 90) }
+        try await Task.sleep(for: .milliseconds(300))
+        model.messages.append(.init(text: "user", isUserMessage: true, height: 44))
+        try await Task.sleep(for: .milliseconds(600))
+
+        let minY = try #require(host.rowFrame(at: 6)?.minY)
+        #expect(abs(minY - MessageListConstants.minimumPinnedTailSpacing) < 2, "pinned message sat at y=\(minY)")
     }
 
     @Test("The inset keeps the last row clear of the floating chrome")
     func insetKeepsLastRowClearOfChrome() async throws {
         let inset: CGFloat = 60
         let model = BottomInsetModel(bottomInset: inset)
-        let view = BottomInsetHarness(model: model)
-
-        ViewHosting.host(view: view, size: CGSize(width: 260, height: 240), function: #function)
-        defer { ViewHosting.expel(function: #function) }
+        let host = MessageListTestHost(size: CGSize(width: 260, height: 240)) {
+            BottomInsetHarness(model: model)
+        }
+        defer { host.close() }
 
         // Enough content that the turn outgrows the viewport and the reserved
         // spacing collapses to zero — the inset is all that is left holding the
@@ -62,10 +70,11 @@ struct MessageListBottomInsetSwiftUITests {
         ]
         try await Task.sleep(for: .milliseconds(800))
 
-        let lastMaxY = try #require(model.lastRowMaxY)
+        let viewport = try #require(host.list?.debugViewportHeight)
+        let lastMaxY = try #require(host.rowFrame(at: 3)?.maxY)
         #expect(
-            lastMaxY <= model.viewportHeight - inset + 1,
-            "last row reached \(lastMaxY) in a \(model.viewportHeight)pt viewport with a \(inset)pt inset"
+            abs(lastMaxY - (viewport - inset)) < 2,
+            "last row reached \(lastMaxY) in a \(viewport)pt viewport with a \(inset)pt inset"
         )
     }
 }
@@ -74,17 +83,12 @@ struct MessageListBottomInsetSwiftUITests {
 private final class BottomInsetModel: ObservableObject {
     let bottomInset: CGFloat
     @Published var messages: [BottomInsetMessage] = []
-    @Published var isAtBottom = false
-    @Published var userMinY: CGFloat?
-    @Published var lastRowMaxY: CGFloat?
-    @Published var viewportHeight: CGFloat = 0
+    @Published var isAtBottom = true
 
     init(bottomInset: CGFloat) {
         self.bottomInset = bottomInset
     }
 }
-
-private let hostSpace = "bottom-inset-host"
 
 private struct BottomInsetHarness: View {
     @ObservedObject var model: BottomInsetModel
@@ -94,22 +98,11 @@ private struct BottomInsetHarness: View {
             messages: model.messages,
             isStreaming: true,
             bottomInset: model.bottomInset,
-            isAtBottom: Binding(
-                get: { model.isAtBottom },
-                set: { model.isAtBottom = $0 }
-            )
+            isAtBottom: $model.isAtBottom
         ) { message in
             Text(message.text)
                 .frame(maxWidth: .infinity, minHeight: message.height, alignment: .leading)
-                .onGeometryChange(for: CGRect.self) { geometry in
-                    geometry.frame(in: .named(hostSpace))
-                } action: { frame in
-                    if message.isUserMessage { model.userMinY = frame.minY }
-                    if message.id == model.messages.last?.id { model.lastRowMaxY = frame.maxY }
-                }
         }
-        .coordinateSpace(.named(hostSpace))
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.viewportHeight = $0 }
     }
 }
 

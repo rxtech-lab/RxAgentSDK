@@ -63,14 +63,14 @@ struct AgentStreamingIndicatorTests {
         ])
         let agent = Agent(clients: [PreviewAgentClient(script: script, deltaInterval: .zero)])
         defer { agent.stop() }
-        let chat = AgentChatView(agent: agent).agentToolCallCollapse(.consecutive(minimum: 2))
+        let chatView = AgentChatView(agent: agent).agentToolCallCollapse(.consecutive(minimum: 2))
         agent.send("Create a template")
         try await waitUntil {
             if case .awaitingPermission = agent.phase { return true }
             return false
         }
         #expect(agent.phase.isBusy)
-        let pending = try chat.inspect().find(AgentStreamingIndicator.self).actualView()
+        let pending = try chatView.inspect().find(AgentChatView<AgentMessageRow, EmptyView>.self).actualView().streamingIndicator
         #expect(try pending.inspect().find(ViewType.HStack.self).accessibilityLabel().string() == "Working")
         let host = IndicatorHost(pending)
         defer { host.close() }
@@ -80,13 +80,13 @@ struct AgentStreamingIndicatorTests {
             agent.thread.messages.flatMap(\.toolCalls).allSatisfy { $0.isComplete }
         }
         #expect(agent.thread.messages.flatMap(\.toolCalls).count == 2)
-        let afterTool = try chat.inspect().find(AgentStreamingIndicator.self).actualView()
+        let afterTool = try chatView.inspect().find(AgentChatView<AgentMessageRow, EmptyView>.self).actualView().streamingIndicator
         #expect(try afterTool.inspect().find(ViewType.HStack.self).accessibilityLabel().string() == "Working")
         host.update(afterTool)
         #expect(try await host.distinctFrames() > 1, "dots stopped before the final answer")
         try await waitUntil { agent.phase == .idle }
         #expect(agent.phase == .idle)
-        let finished = try chat.inspect().find(AgentStreamingIndicator.self).actualView()
+        let finished = try chatView.inspect().find(AgentChatView<AgentMessageRow, EmptyView>.self).actualView().streamingIndicator
         #expect(try finished.inspect().find(ViewType.HStack.self).accessibilityLabel().string() == "")
         host.update(finished)
         try await Task.sleep(for: .milliseconds(200))

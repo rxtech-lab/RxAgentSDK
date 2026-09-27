@@ -138,10 +138,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
             rowPadding: theme.rowPadding,
             accessoryContent: { accessory in
                 if accessory.kind == .streamingIndicator {
-                    AgentStreamingIndicator(
-                        isStreaming: isStreaming,
-                        usage: agent.thread.usage
-                    )
+                    streamingIndicator
                 }
             },
             rowContent: { item in
@@ -154,6 +151,12 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
         )
         .frame(maxHeight: .infinity)
         .background(theme.listBackground)
+    }
+
+    /// Internal so tests can reach it: transcript rows are hosted in a native
+    /// list, out of ViewInspector's reach.
+    var streamingIndicator: AgentStreamingIndicator {
+        AgentStreamingIndicator(isStreaming: isStreaming, usage: agent.thread.usage)
     }
 
     // MARK: Floating chrome
