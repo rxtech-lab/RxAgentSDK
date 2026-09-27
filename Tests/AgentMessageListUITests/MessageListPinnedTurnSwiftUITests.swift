@@ -1,45 +1,61 @@
 #if os(macOS)
 import SwiftUI
 import Testing
-import ViewInspector
 @testable import AgentMessageListUI
 
 @MainActor
-@Suite("MessageList pinned turn SwiftUI behavior")
+@Suite("MessageList pinned turn behavior", .serialized)
 struct MessageListPinnedTurnSwiftUITests {
     @Test("Streaming content that fills the reserved space keeps the list following the bottom")
     func streamingContentFillingReservedSpaceFollowsBottom() async throws {
         let model = MessageListPinnedTurnModel()
-        let view = MessageListPinnedTurnHarness(model: model)
-
-        ViewHosting.host(
-            view: view,
-            size: CGSize(width: 260, height: 180),
-            function: #function
-        )
-        defer { ViewHosting.expel(function: #function) }
+        let host = MessageListTestHost(size: CGSize(width: 260, height: 180)) {
+            MessageListPinnedTurnHarness(model: model)
+        }
+        defer { host.close() }
 
         // A fresh user message pins to the top with reserved space below it.
-        model.messages = [
-            .init(text: "user", isUserMessage: true, height: 44),
-        ]
-
+        model.messages = [.init(text: "user", isUserMessage: true, height: 44)]
         try await Task.sleep(for: .milliseconds(450))
 
         // The streaming response grows the turn until it outgrows the viewport,
-        // collapsing the reserved space. The pin releases and the list must keep
-        // following the bottom — it must not be stranded above the bottom.
+        // collapsing the reserved space. The list must keep following the
+        // bottom rather than being stranded above it.
         model.messages.append(contentsOf: [
             .init(text: "assistant 1", isUserMessage: false, height: 88),
             .init(text: "assistant 2", isUserMessage: false, height: 88),
             .init(text: "assistant 3", isUserMessage: false, height: 88),
         ])
-
-        // Let the layout settle after the turn fills the viewport, then assert the
-        // list reports it is following the bottom rather than stranded.
         try await Task.sleep(for: .milliseconds(600))
 
         #expect(model.isAtBottom)
+        let viewport = try #require(host.list?.debugViewportHeight)
+        let lastMaxY = try #require(host.rowFrame(at: 3)?.maxY)
+        #expect(abs(lastMaxY - viewport) < 2, "last row ended at \(lastMaxY) of \(viewport)")
+    }
+
+    @Test("A growing streamed row stays followed at the bottom")
+    func growingRowIsFollowed() async throws {
+        let model = MessageListPinnedTurnModel()
+        let host = MessageListTestHost(size: CGSize(width: 260, height: 180)) {
+            MessageListPinnedTurnHarness(model: model)
+        }
+        defer { host.close() }
+
+        model.messages = [
+            .init(text: "user", isUserMessage: true, height: 44),
+            .init(text: "assistant", isUserMessage: false, height: 60),
+        ]
+        try await Task.sleep(for: .milliseconds(400))
+        for step in 1...6 {
+            model.messages[1].height = 60 + CGFloat(step) * 60
+            try await Task.sleep(for: .milliseconds(120))
+        }
+        try await Task.sleep(for: .milliseconds(200))
+
+        let viewport = try #require(host.list?.debugViewportHeight)
+        let lastMaxY = try #require(host.rowFrame(at: 1)?.maxY)
+        #expect(abs(lastMaxY - viewport) < 2, "last row ended at \(lastMaxY) of \(viewport)")
     }
 }
 
@@ -56,10 +72,7 @@ private struct MessageListPinnedTurnHarness: View {
         MessageList(
             messages: model.messages,
             isStreaming: true,
-            isAtBottom: Binding(
-                get: { model.isAtBottom },
-                set: { model.isAtBottom = $0 }
-            )
+            isAtBottom: $model.isAtBottom
         ) { message in
             Text(message.text)
                 .frame(maxWidth: .infinity, minHeight: message.height, alignment: .leading)
@@ -71,6 +84,6 @@ private struct MessageListPinnedTurnMessage: MessageListItem {
     let id = UUID()
     let text: String
     let isUserMessage: Bool
-    let height: CGFloat
+    var height: CGFloat
 }
 #endif

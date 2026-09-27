@@ -18,10 +18,9 @@ struct MessageListPreviewTests {
         try view.inspect().find(button: "Send 3").tap()
         try view.inspect().find(button: "Send 4").tap()
 
-        let inspected = try view.inspect()
-        let texts = inspected.findAll(ViewType.Text.self).compactMap { try? $0.string() }
-
-        #expect(texts.contains("4"))
+        // Rows are hosted in a native list view, out of ViewInspector's reach;
+        // check what the list was handed instead.
+        #expect(model.messages.last?.text == "4")
     }
 
     @Test("Incoming assistant messages while scrolled up keep the bottom binding false")
@@ -35,10 +34,9 @@ struct MessageListPreviewTests {
         try view.inspect().find(button: "Send 3").tap()
         try view.inspect().find(button: "Send 4").tap()
 
-        let inspected = try view.inspect()
-        let texts = inspected.findAll(ViewType.Text.self).compactMap { try? $0.string() }
-
-        #expect(texts.contains("4"))
+        // Rows are hosted in a native list view, out of ViewInspector's reach;
+        // check what the list was handed instead.
+        #expect(model.messages.last?.text == "4")
         #expect(!model.isAtBottom)
         #expect(!model.shouldScrollToBottom)
     }
