@@ -27,9 +27,21 @@ struct ContentView: View {
             sidebarContent
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300)
         } detail: {
-            // The whole point of the SDK: one line for a working chat surface.
-            AgentChatView(agent: model.agent)
-                .toolbar { toolbarContent }
+            VStack(spacing: 0) {
+                if let startupMessage = model.startupMessage {
+                    Label(startupMessage, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.orange.opacity(0.12))
+                }
+
+                // The whole point of the SDK: one line for a working chat surface.
+                AgentChatView(agent: model.agent)
+            }
+            .toolbar { toolbarContent }
         }
         .fileImporter(
             isPresented: $isChoosingDirectory,
