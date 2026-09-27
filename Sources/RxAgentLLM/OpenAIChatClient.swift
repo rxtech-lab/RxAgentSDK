@@ -43,6 +43,9 @@ public struct OpenAIChatClient: AgentClient {
         /// OpenAI-compatible gateways front non-reasoning models, and a picker
         /// whose every option is rejected is worse than no picker.
         public var reasoningLevels: [AgentReasoningOption]
+        /// Models known by the host for this endpoint. Empty means the host
+        /// does not want a model picker and callers may still pin a model.
+        public var modelOptions: [AgentModelOption]
         /// Body field the chosen level is sent as. `reasoning_effort` is the
         /// OpenAI spelling; a gateway that nests it elsewhere needs its own key.
         public var reasoningEffortKey: String
@@ -78,6 +81,7 @@ public struct OpenAIChatClient: AgentClient {
             defaultModel: String? = nil,
             extraBody: [String: JSONValue] = [:],
             reasoningLevels: [AgentReasoningOption] = [],
+            modelOptions: [AgentModelOption] = [],
             reasoningEffortKey: String = "reasoning_effort",
             streaming: Bool = true,
             maxToolResultCharacters: Int = 120_000,
@@ -89,6 +93,7 @@ public struct OpenAIChatClient: AgentClient {
             self.defaultModel = defaultModel
             self.extraBody = extraBody
             self.reasoningLevels = reasoningLevels
+            self.modelOptions = modelOptions
             self.reasoningEffortKey = reasoningEffortKey
             self.streaming = streaming && unaryTransport == nil
             self.maxToolResultCharacters = maxToolResultCharacters
@@ -105,6 +110,7 @@ public struct OpenAIChatClient: AgentClient {
             model: String? = nil,
             extraBody: [String: JSONValue] = [:],
             reasoningLevels: [AgentReasoningOption] = [],
+            modelOptions: [AgentModelOption] = [],
             send: @escaping @Sendable (Data) async throws -> Data
         ) -> Configuration {
             Configuration(
@@ -112,6 +118,7 @@ public struct OpenAIChatClient: AgentClient {
                 defaultModel: model,
                 extraBody: extraBody,
                 reasoningLevels: reasoningLevels,
+                modelOptions: modelOptions,
                 streaming: false,
                 unaryTransport: send
             )
@@ -123,13 +130,15 @@ public struct OpenAIChatClient: AgentClient {
             endpoint: URL,
             model: String? = nil,
             extraBody: [String: JSONValue] = [:],
-            reasoningLevels: [AgentReasoningOption] = []
+            reasoningLevels: [AgentReasoningOption] = [],
+            modelOptions: [AgentModelOption] = []
         ) -> Configuration {
             Configuration(
                 endpoint: endpoint,
                 defaultModel: model,
                 extraBody: extraBody,
-                reasoningLevels: reasoningLevels
+                reasoningLevels: reasoningLevels,
+                modelOptions: modelOptions
             ) {
                 ["Authorization": "Bearer \(key)"]
             }
@@ -169,6 +178,10 @@ public struct OpenAIChatClient: AgentClient {
 
     public func availableReasoningLevels() async -> [AgentReasoningOption] {
         configuration.reasoningLevels
+    }
+
+    public func availableModels() async -> [AgentModelOption] {
+        configuration.modelOptions
     }
 
     /// `extraBody` plus this turn's reasoning effort.

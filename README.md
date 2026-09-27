@@ -122,6 +122,96 @@ agent.select(.codex)   // same thread, Codex's own native session id
 A client joining a thread it has not seen gets a compact summary of what happened before
 (`sendsHandoffSummary`).
 
+## Dynamic client registry
+
+Hosts that need to add providers without adding another RxCode-specific branch can use
+the SDK registry. Existing direct construction remains supported; this API is additive
+and is the compatibility bridge for applications migrating from a fixed Provider enum.
+
+```swift
+let registry = try DefaultAgentClientRegistry.make()
+
+try await registry.register(MyProviderFactory())
+
+let descriptors = await registry.descriptors()
+let client = try await registry.makeClient(
+    id: .qwen,
+    configuration: AgentClientConfiguration(
+        clientID: .qwen,
+        model: "qwen3-coder-plus",
+        secret: keyFromKeychain
+    )
+)
+
+let agent = Agent(clients: [client])
+```
+
+`AgentClientDescriptor` is the host-facing metadata: stable client id, display name,
+wire provider, and capabilities. `AgentClientFactory` owns provider-specific validation
+and construction. `AgentClientConfiguration` is deliberately generic; its `secret` is
+not encoded by `Codable`, so hosts can load it from Keychain for one construction call
+without putting it in synced settings.
+
+The default registry includes:
+
+| Client | Factory | Transport | Platform |
+| --- | --- | --- | --- |
+| OpenAI-compatible | `OpenAICompatibleFactory` | HTTP/SSE | macOS/iOS |
+| Qwen model API | `QwenModelFactory` | DashScope HTTP/SSE | macOS/iOS |
+| Claude Code | `ClaudeCodeFactory` | local CLI | macOS |
+| Codex | `CodexFactory` | local app-server CLI | macOS |
+| Qwen Code | `QwenCodeFactory` | `qwen --acp` | macOS |
+
+The registry does not change existing RxCode integration. An existing host can continue
+using `SDKBackendFactory` and direct clients while migrating one provider at a time.
+The intended migration is:
+
+```text
+existing RxCode backend
+        ↓
+SDKAgentBackend (unchanged)
+        ↓
+AgentClientRegistry (new optional source of clients)
+        ↓
+any AgentClient
+```
+
+For a new provider, choose the smallest compatible layer:
+
+1. Use `OpenAICompatibleFactory` when URL, bearer auth, model and body fields are enough.
+2. Add a provider-specific factory when authentication, fields or response events differ.
+3. Use `ACPClient` or add a native `AgentClient` when the provider ships a coding-agent
+   CLI or another agent protocol.
+
+Do not put provider-specific fields in `AgentSendRequest`, `AgentThread`, or RxCode's
+common UI state. Keep them in the factory/configuration boundary.
+
+### Registry configuration and persistence
+
+Persist only non-secret configuration:
+
+```swift
+let saved = AgentClientConfiguration(
+    clientID: .qwen,
+    endpoint: qwenEndpoint,
+    model: "qwen3-coder-plus",
+    workspaceID: workspaceID
+)
+
+// At runtime, inject the secret from Keychain:
+let runtime = AgentClientConfiguration(
+    clientID: saved.clientID,
+    endpoint: saved.endpoint,
+    model: saved.model,
+    workspaceID: saved.workspaceID,
+    secret: keychain.read("qwen")
+)
+```
+
+Never commit API keys, place them in `Package.swift`, or include them in synced
+configuration. Native CLI clients should normally use the CLI's own authentication
+store rather than receiving a raw API key from the host.
+
 ## Reasoning effort
 
 Every agent has a dial for how hard the model thinks, and no two spell it the same way:
@@ -546,6 +636,31 @@ xcodebuild -project example/example.xcodeproj -scheme example \
 The app sandbox is **off** — spawning `claude`/`codex` from the login PATH and binding
 loopback ports is impossible under it. Launch with `-RXAgentPreviewClient YES` to run
 against scripted events with nothing installed.
+
+For a real Qwen smoke test, keep the key outside the repository and launch the
+app executable with `-RXAgentQwen YES`:
+
+```
+DASHSCOPE_API_KEY="$YOUR_DASHSCOPE_KEY" \
+DASHSCOPE_ENDPOINT="https://your-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" \
+QWEN_MODEL="qwen3-coder-plus" \
+  /path/to/example.app/Contents/MacOS/example -RXAgentQwen YES
+```
+
+The Qwen client is selected automatically. Its normalized events are visible
+in the `Events` sidebar, including streaming text, tool calls, results, usage,
+and errors. Without `DASHSCOPE_API_KEY`, the app shows a configuration warning
+and does not send a request.
+
+To test the native Qwen Code harness instead, authenticate Qwen Code with
+`qwen` and launch:
+
+```
+/path/to/example.app/Contents/MacOS/example -RXAgentQwenCode YES
+```
+
+This starts `qwen --acp` through the SDK's existing `ACPClient`. Qwen Code
+keeps its own authentication and session state under its normal configuration.
 
 ## Tests
 

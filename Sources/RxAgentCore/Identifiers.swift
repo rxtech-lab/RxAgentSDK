@@ -18,6 +18,11 @@ public struct AgentClientID: Hashable, Sendable, Codable, ExpressibleByStringLit
     public static let claudeCode: AgentClientID = "claude-code"
     public static let codex: AgentClientID = "codex"
     public static let openAICompatible: AgentClientID = "openai-compatible"
+    /// Stable id for a configured Qwen model client. Its wire provider remains
+    /// `.openAICompatible` until a native Qwen Code harness is added.
+    public static let qwen: AgentClientID = "qwen"
+    /// Native Qwen Code harness driven through ACP.
+    public static let qwenCode: AgentClientID = "qwen-code"
     public static let foundationModels: AgentClientID = "foundation-models"
 
     /// Namespaced id for an ACP agent, e.g. `acp:gemini`.

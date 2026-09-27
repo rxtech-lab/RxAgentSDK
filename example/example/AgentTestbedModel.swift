@@ -70,6 +70,7 @@ final class AgentTestbedModel {
     /// working on a decoder.
     private(set) var eventLog: [String] = []
     private(set) var pastSessions: [CLISessionSummary] = []
+    private(set) var startupMessage: String?
 
     /// Runs against scripted events instead of a real CLI. Enabled by launching
     /// with `-RXAgentPreviewClient YES`, which is how the UI tests drive the app
@@ -78,12 +79,77 @@ final class AgentTestbedModel {
         UserDefaults.standard.bool(forKey: "RXAgentPreviewClient")
     }
 
+    /// Enables a real DashScope-backed Qwen client for smoke testing. The API
+    /// key and endpoint are read from the process environment and never saved.
+    static var usesQwenClient: Bool {
+        UserDefaults.standard.bool(forKey: "RXAgentQwen")
+    }
+
+    static var usesQwenCodeClient: Bool {
+        UserDefaults.standard.bool(forKey: "RXAgentQwenCode")
+    }
+
+    static var dashscopeAPIKey: String? {
+        let value = ProcessInfo.processInfo.environment["DASHSCOPE_API_KEY"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    static var dashscopeEndpoint: URL? {
+        guard let value = ProcessInfo.processInfo.environment["DASHSCOPE_ENDPOINT"],
+              !value.isEmpty else { return nil }
+        return URL(string: value)
+    }
+
+    static var qwenModel: String {
+        ProcessInfo.processInfo.environment["QWEN_MODEL"] ?? "qwen3-coder-plus"
+    }
+
+    static var qwenModels: [AgentModelOption] {
+        let raw = ProcessInfo.processInfo.environment["QWEN_MODELS"]
+            ?? "qwen3-coder-plus,qwen-plus,qwen-max"
+        return raw.split(separator: ",").map { id in
+            AgentModelOption(id: String(id), displayName: String(id))
+        }
+    }
+
     init() {
         let workingDirectory = URL(filePath: FileManager.default.currentDirectoryPath)
         let sink = noteSink
 
-        let clients: [any AgentClient] = Self.usesPreviewClient
-            ? [
+        let clients: [any AgentClient]
+        if Self.usesQwenCodeClient {
+            do {
+                let qwenCode = try QwenCodeFactory().makeClient(
+                    configuration: AgentClientConfiguration(clientID: .qwenCode)
+                )
+                clients = [qwenCode]
+            } catch {
+                startupMessage = "Qwen Code configuration failed: \(error.localizedDescription)"
+                clients = [PreviewAgentClient(script: .failure)]
+            }
+        } else if Self.usesQwenClient {
+            if let apiKey = Self.dashscopeAPIKey {
+                do {
+                    let qwen = try QwenModelFactory(modelOptions: Self.qwenModels).makeClient(
+                        configuration: AgentClientConfiguration(
+                            clientID: .qwen,
+                            endpoint: Self.dashscopeEndpoint,
+                            model: Self.qwenModel,
+                            secret: apiKey
+                        )
+                    )
+                    clients = [qwen]
+                } catch {
+                    startupMessage = "Qwen configuration failed: \(error.localizedDescription)"
+                    clients = [PreviewAgentClient(script: .failure)]
+                }
+            } else {
+                startupMessage = "Qwen smoke test is enabled, but DASHSCOPE_API_KEY is missing."
+                clients = [PreviewAgentClient(script: .failure)]
+            }
+        } else if Self.usesPreviewClient {
+            clients = [
                 PreviewAgentClient(
                     id: "preview-answer", displayName: "Preview", script: .simpleAnswer
                 ),
@@ -91,7 +157,9 @@ final class AgentTestbedModel {
                     id: "preview-tools", displayName: "Preview (tools)", script: .toolUse
                 ),
             ]
-            : [ClaudeCodeClient(), CodexClient()]
+        } else {
+            clients = [ClaudeCodeClient(), CodexClient()]
+        }
 
         agent = Agent(
             clients: clients,
