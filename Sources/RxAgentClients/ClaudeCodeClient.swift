@@ -65,7 +65,7 @@ public struct ClaudeCodeClient: AgentClient {
     public func availableModels() async -> [AgentModelOption] {
         [
             AgentModelOption(id: "fable", displayName: "Fable"),
-            AgentModelOption(id: "opus", displayName: "Opus"),
+            AgentModelOption(id: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)"),
             AgentModelOption(id: "sonnet", displayName: "Sonnet"),
             AgentModelOption(id: "haiku", displayName: "Haiku"),
         ]

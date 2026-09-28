@@ -1,0 +1,51 @@
+name: Update Claude models
+
+on:
+  schedule:
+    # Daily at 09:00 UTC.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Check for new Claude model IDs
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Anthropic SDK
+        run: pip install anthropic
+
+      - name: Update pinned model IDs
+        id: update
+        run: |
+          {
+            echo "changes<<EOF"
+            python3 .github/scripts/update_claude_models.py
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.update.outputs.changes != ''
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/update-claude-models
+          delete-branch: true
+          commit-message: "chore: update pinned Claude model IDs"
+          title: "chore: update pinned Claude model IDs"
+          body: |
+            A newer Claude model was published on the Models API.
+
+            ${{ steps.update.outputs.changes }}
