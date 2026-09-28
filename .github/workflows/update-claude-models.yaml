@@ -28,7 +28,7 @@ jobs:
       - name: Install Anthropic SDK
         run: pip install anthropic
 
-      - name: Update pinned model IDs
+      - name: Update model IDs
         id: update
         run: |
           {
@@ -43,8 +43,8 @@ jobs:
         with:
           branch: chore/update-claude-models
           delete-branch: true
-          commit-message: "chore: update pinned Claude model IDs"
-          title: "chore: update pinned Claude model IDs"
+          commit-message: "chore: update Claude model IDs"
+          title: "chore: update Claude model IDs"
           body: |
             A newer Claude model was published on the Models API.
 

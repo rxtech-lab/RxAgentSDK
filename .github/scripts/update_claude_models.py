@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Bump pinned Claude model IDs in ClaudeCodeClient.swift to the newest release.
+"""Bump the Claude model IDs in ClaudeCodeClient.swift to the newest release.
 
-Only entries pinned to a full ID (`claude-<family>-...`) are touched; bare
-aliases such as `fable` or `sonnet` already track the latest model in the CLI.
-A `[1m]` suffix is kept when the new model still has a 1M-token context.
+Every entry is rewritten to the full model ID the Models API reports as the
+newest in its family (opus, sonnet, ...); a bare alias such as `sonnet` is
+replaced with a full ID too. A `[1m]` suffix is kept when the new model still
+has a 1M-token context.
 
 Prints a Markdown summary of the changes to stdout (empty when up to date).
 
@@ -19,8 +20,9 @@ SWIFT_FILE = "Sources/RxAgentClients/ClaudeCodeClient.swift"
 ONE_MILLION = 1_000_000
 
 # AgentModelOption(id: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)")
+# AgentModelOption(id: "sonnet", displayName: "Sonnet")
 ENTRY = re.compile(
-    r'AgentModelOption\(id: "(?P<id>claude-(?P<family>[a-z]+)-[0-9a-z-]+?)(?P<suffix>\[1m\])?", '
+    r'AgentModelOption\(id: "(?P<id>(?:claude-)?(?P<family>[a-z]+)(?:-[0-9-]+)?)(?P<suffix>\[1m\])?", '
     r'displayName: "(?P<name>[^"]*)"\)'
 )
 
@@ -77,15 +79,15 @@ def main() -> int:
         changes.append(f"- `{current}` → `{new_id}` ({new_name})")
         return f'AgentModelOption(id: "{new_id}", displayName: "{new_name}")'
 
-    updated, pinned = ENTRY.subn(replace, source)
-    log(f"Found {pinned} pinned model ID(s) in {SWIFT_FILE}")
+    updated, count = ENTRY.subn(replace, source)
+    log(f"Found {count} model ID(s) in {SWIFT_FILE}")
     if updated != source:
         with open(SWIFT_FILE, "w") as f:
             f.write(updated)
         log(f"Updated {len(changes)} model ID(s)")
         print("\n".join(changes))
     else:
-        log("All pinned model IDs are up to date")
+        log("All model IDs are up to date")
     return 0
 
 
