@@ -25,9 +25,16 @@ ENTRY = re.compile(
 )
 
 
+def log(message: str) -> None:
+    # stdout is captured as the PR body, so logs go to stderr.
+    print(message, file=sys.stderr)
+
+
 def fetch_models() -> list[dict]:
     # `list()` auto-paginates across every page.
-    return [model.model_dump(mode="json") for model in anthropic.Anthropic().models.list()]
+    models = [model.model_dump(mode="json") for model in anthropic.Anthropic().models.list()]
+    log(f"Fetched {len(models)} models from the Models API")
+    return models
 
 
 def latest_by_family(models: list[dict]) -> dict[str, dict]:
@@ -39,6 +46,8 @@ def latest_by_family(models: list[dict]) -> dict[str, dict]:
         family = match.group(1)
         if family not in latest or model["created_at"] > latest[family]["created_at"]:
             latest[family] = model
+    for family, model in sorted(latest.items()):
+        log(f"Latest {family}: {model['id']} ({model['display_name']}, released {model['created_at']})")
     return latest
 
 
@@ -50,21 +59,33 @@ def main() -> int:
     changes: list[str] = []
 
     def replace(match: re.Match) -> str:
+        current = match["id"] + (match["suffix"] or "")
         newest = latest.get(match["family"])
-        if newest is None or newest["id"] == match["id"]:
+        if newest is None:
+            log(f"{current}: no {match['family']} models on the Models API, skipping")
+            return match[0]
+        if newest["id"] == match["id"]:
+            log(f"{current}: up to date")
             return match[0]
         wants_1m = bool(match["suffix"])
         has_1m = wants_1m and (newest.get("max_input_tokens") or 0) >= ONE_MILLION
         new_id = newest["id"] + ("[1m]" if has_1m else "")
         new_name = newest["display_name"].removeprefix("Claude ") + (" (1M)" if has_1m else "")
-        changes.append(f"- `{match['id']}{match['suffix'] or ''}` → `{new_id}` ({new_name})")
+        if wants_1m and not has_1m:
+            log(f"{current}: {newest['id']} has no 1M context, dropping the [1m] suffix")
+        log(f"{current}: updating to {new_id} ({new_name})")
+        changes.append(f"- `{current}` → `{new_id}` ({new_name})")
         return f'AgentModelOption(id: "{new_id}", displayName: "{new_name}")'
 
-    updated = ENTRY.sub(replace, source)
+    updated, pinned = ENTRY.subn(replace, source)
+    log(f"Found {pinned} pinned model ID(s) in {SWIFT_FILE}")
     if updated != source:
         with open(SWIFT_FILE, "w") as f:
             f.write(updated)
+        log(f"Updated {len(changes)} model ID(s)")
         print("\n".join(changes))
+    else:
+        log("All pinned model IDs are up to date")
     return 0
 
 
