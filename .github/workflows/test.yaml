@@ -6,6 +6,9 @@ concurrency:
 
 on:
   push:
+  # Pushes made with GITHUB_TOKEN (e.g. the model-update bot) don't trigger
+  # `push`, so that workflow dispatches this one explicitly.
+  workflow_dispatch:
 
 jobs:
   test-macos:
