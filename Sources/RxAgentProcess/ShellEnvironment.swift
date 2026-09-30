@@ -31,7 +31,9 @@ public actor ShellEnvironment {
         }
 
         if let shellPath = await readLoginShellPath() {
-            shellPath.split(separator: ":").forEach { add(String($0)) }
+            for entry in shellPath.split(separator: ":") {
+                add(String(entry))
+            }
         }
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -48,7 +50,9 @@ public actor ShellEnvironment {
         if let nvmBin = latestNVMBinDirectory(home: home) { add(nvmBin) }
 
         if let existing = ProcessInfo.processInfo.environment["PATH"] {
-            existing.split(separator: ":").forEach { add(String($0)) }
+            for entry in existing.split(separator: ":") {
+                add(String(entry))
+            }
         }
 
         // Re-check: a reentrant caller may have populated the cache across the await.
