@@ -35,11 +35,24 @@ public enum MessageListLoadDirection: Sendable, Equatable {
     case next
 }
 
+/// When the latest user message is pinned to the top of the viewport, with
+/// space reserved below it for the answer.
+public enum MessageListUserMessagePinning: Sendable, Equatable {
+    /// Pin while `isStreaming` is true, or while the user message is the last row.
+    case whileStreaming
+    /// Also pin a user message appended after the existing rows, even when
+    /// `isStreaming` stays false or a reply placeholder is appended with it.
+    case onSend
+    /// Never pin; new messages just scroll the list to the bottom.
+    case never
+}
+
 public struct MessageList<Message: MessageListItem, RowContent: View>: View {
     private let messages: [Message]
     private let isStreaming: Bool
     private let shouldScrollToBottom: Bool
     private let scrollToBottomAnimated: Bool
+    private let userMessagePinning: MessageListUserMessagePinning
     private let bottomInset: CGFloat
     @Binding private var isAtBottom: Bool
     private let hasMorePrevious: () -> Bool
@@ -54,6 +67,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         isStreaming: Bool = false,
         shouldScrollToBottom: Bool = false,
         scrollToBottomAnimated: Bool = true,
+        userMessagePinning: MessageListUserMessagePinning = .whileStreaming,
         bottomInset: CGFloat = 0,
         isAtBottom: Binding<Bool> = .constant(true),
         hasMorePrevious: @escaping () -> Bool = { false },
@@ -67,6 +81,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
         self.isStreaming = isStreaming
         self.shouldScrollToBottom = shouldScrollToBottom
         self.scrollToBottomAnimated = scrollToBottomAnimated
+        self.userMessagePinning = userMessagePinning
         self.bottomInset = max(0, bottomInset)
         self._isAtBottom = isAtBottom
         self.hasMorePrevious = hasMorePrevious
@@ -87,6 +102,7 @@ public struct MessageList<Message: MessageListItem, RowContent: View>: View {
                 isStreaming: isStreaming,
                 shouldScrollToBottom: shouldScrollToBottom,
                 scrollToBottomAnimated: scrollToBottomAnimated,
+                userMessagePinning: userMessagePinning,
                 bottomInset: bottomInset,
                 hasMorePrevious: hasMorePrevious,
                 hasMore: hasMore,
