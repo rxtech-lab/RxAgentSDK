@@ -45,6 +45,7 @@ final class MessageListEngine<Message: MessageListItem> {
         var isStreaming = false
         var shouldScrollToBottom = false
         var scrollToBottomAnimated = true
+        var userMessagePinning: MessageListUserMessagePinning = .whileStreaming
         var bottomInset: CGFloat = 0
         var hasMorePrevious: () -> Bool = { false }
         var hasMore: () -> Bool = { false }
@@ -188,9 +189,19 @@ final class MessageListEngine<Message: MessageListItem> {
         new: MessageListChangeToken<Message.ID>
     ) {
         let latestContentItem = self.latestContentItem
+        guard configuration.userMessagePinning != .never else {
+            pinning.clear()
+            refreshTail()
+            apply(isAnchoredAtBottom ? .scrollToBottom : .none)
+            return
+        }
+
         if old?.latestUserMessageID != new.latestUserMessageID,
            let latestUserMessageID = new.latestUserMessageID,
-           configuration.isStreaming || latestContentItem?.isUserMessage == true {
+           configuration.isStreaming
+            || latestContentItem?.isUserMessage == true
+            || (configuration.userMessagePinning == .onSend
+                && isAppended(latestUserMessageID, old: old, new: new)) {
             apply(pinning.handleLastMessageChange(
                 id: latestUserMessageID,
                 isUserMessage: true,
@@ -206,6 +217,19 @@ final class MessageListEngine<Message: MessageListItem> {
             isStreaming: configuration.isStreaming,
             isAtBottom: isAnchoredAtBottom
         ))
+    }
+
+    /// True when `id` was added after the rows that were already shown — a send —
+    /// rather than arriving with an initial load or a wholesale replacement.
+    private func isAppended(
+        _ id: Message.ID,
+        old: MessageListChangeToken<Message.ID>?,
+        new: MessageListChangeToken<Message.ID>
+    ) -> Bool {
+        guard let old, !old.ids.contains(id), let index = new.ids.firstIndex(of: id) else { return false }
+        guard let previousLast = old.ids.last else { return true }
+        guard let previousLastIndex = new.ids.firstIndex(of: previousLast) else { return false }
+        return previousLastIndex < index
     }
 
     private func apply(_ action: MessageListPinningAction<Message.ID>) {
