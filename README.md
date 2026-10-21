@@ -246,6 +246,14 @@ OpenAIChatClient(configuration: .apiKey(
 ))
 ```
 
+ACP clients apply `agent.model` (or `AgentSendRequest.model`) before each prompt,
+including turns that reuse a session. Model choices are discovered from the session's
+`configOptions` model selector, including grouped options, or legacy
+`models.availableModels`. The SDK sends `session/set_config_option` or
+`session/set_model` as appropriate. Setting the model to `nil` restores the model
+reported when the session was created. Unsupported or rejected choices fail the turn
+before a prompt is sent; they do not silently fall back to another model.
+
 `AgentReasoningPicker` renders the choice — in `AgentChatView`'s own header for free, or
 anywhere the host wants it:
 
