@@ -26,6 +26,9 @@ actor ACPRuntime {
         let decoder: ACPUpdateDecoder
         let agentSessionID: String
         var supportsHTTPMCP: Bool
+        var modelSelection: ACPModelSelection?
+        let defaultModel: String?
+        var activeModel: String?
     }
 
     private var entries: [AgentThreadID: Entry] = [:]
@@ -41,7 +44,9 @@ actor ACPRuntime {
         turnThreads[request.turnID] = request.threadID
 
         // Reuse the pooled process when it's still alive.
-        if let existing = entries[request.threadID], await existing.process.isRunning {
+        if var existing = entries[request.threadID], await existing.process.isRunning {
+            try await applyModel(request.model, to: &existing)
+            entries[request.threadID] = existing
             return ACPSession(
                 process: existing.process,
                 connection: existing.connection,
@@ -105,43 +110,85 @@ actor ACPRuntime {
         let supportsHTTP = Self.supports(transport: "http", in: initResult)
         let supportsSSE = Self.supports(transport: "sse", in: initResult)
 
-        // 2. session/new
-        let mcpServers = MCPConfigRenderer.acpServers(
-            servers: request.mcpServers,
-            toolServer: request.toolServer,
-            supportsHTTP: supportsHTTP,
-            supportsSSE: supportsSSE
-        )
-        let newResult = try await connection.request("session/new", params: .object([
-            "cwd": .string(request.workingDirectory.path),
-            "mcpServers": .array(mcpServers),
-        ]))
+        do {
+            // 2. session/new
+            let mcpServers = MCPConfigRenderer.acpServers(
+                servers: request.mcpServers,
+                toolServer: request.toolServer,
+                supportsHTTP: supportsHTTP,
+                supportsSSE: supportsSSE
+            )
+            let newResult = try await connection.request("session/new", params: .object([
+                "cwd": .string(request.workingDirectory.path),
+                "mcpServers": .array(mcpServers),
+            ]))
 
-        guard let agentSessionID = newResult["sessionId"]?.stringValue else {
+            guard let agentSessionID = newResult["sessionId"]?.stringValue else {
+                await connection.close()
+                await process.terminate()
+                throw AgentError.protocolViolation("session/new returned no sessionId")
+            }
+
+            if let models = Self.modelOptions(from: newResult), !models.isEmpty {
+                continuation.yield(.modelsDiscovered(models))
+            }
+
+            let selection = ACPModelSelection.parse(newResult)
+            var entry = Entry(
+                process: process,
+                connection: connection,
+                decoder: decoder,
+                agentSessionID: agentSessionID,
+                supportsHTTPMCP: supportsHTTP,
+                modelSelection: selection,
+                defaultModel: selection?.currentModel,
+                activeModel: selection?.currentModel ?? (client.modelEnvVar == nil ? nil : request.model)
+            )
+            try await applyModel(request.model, to: &entry)
+            entries[request.threadID] = entry
+
+            return ACPSession(
+                process: process,
+                connection: connection,
+                decoder: decoder,
+                agentSessionID: agentSessionID,
+                isNew: true
+            )
+        } catch {
             await connection.close()
             await process.terminate()
-            throw AgentError.protocolViolation("session/new returned no sessionId")
+            throw error
         }
+    }
 
-        if let models = Self.modelOptions(from: newResult), !models.isEmpty {
-            continuation.yield(.modelsDiscovered(models))
+    private func applyModel(_ requested: String?, to entry: inout Entry) async throws {
+        let explicit = requested.flatMap { $0.isEmpty ? nil : $0 }
+        let target = explicit ?? entry.defaultModel
+        guard target != entry.activeModel else { return }
+        guard let target, let selection = entry.modelSelection else {
+            throw AgentError.protocolViolation("This ACP client did not advertise support for changing models.")
         }
-
-        entries[request.threadID] = Entry(
-            process: process,
-            connection: connection,
-            decoder: decoder,
-            agentSessionID: agentSessionID,
-            supportsHTTPMCP: supportsHTTP
-        )
-
-        return ACPSession(
-            process: process,
-            connection: connection,
-            decoder: decoder,
-            agentSessionID: agentSessionID,
-            isNew: true
-        )
+        guard selection.options.contains(where: { $0.id == target }) else {
+            throw AgentError.protocolViolation("The ACP client does not offer model '\(target)'. Refresh its model list.")
+        }
+        var params: [String: JSONValue] = ["sessionId": .string(entry.agentSessionID)]
+        let method: String
+        if let configID = selection.configID {
+            method = "session/set_config_option"
+            params["configId"] = .string(configID)
+            params["value"] = .string(target)
+        } else {
+            method = "session/set_model"
+            params["modelId"] = .string(target)
+        }
+        let result = try await entry.connection.request(method, params: .object(params))
+        if let updated = ACPModelSelection.parse(result) {
+            guard updated.currentModel == nil || updated.currentModel == target else {
+                throw AgentError.protocolViolation("The ACP client did not accept model '\(target)'.")
+            }
+            entry.modelSelection = updated
+        }
+        entry.activeModel = target
     }
 
     // MARK: - Lifecycle
@@ -175,25 +222,42 @@ actor ACPRuntime {
     }
 
     static func modelOptions(from result: JSONValue) -> [AgentModelOption]? {
-        // Models arrive as a config option with a list of allowed values.
-        guard let options = result["configOptions"]?.arrayValue
-            ?? result["models"]?.arrayValue
-        else { return nil }
+        ACPModelSelection.parse(result)?.options
+    }
+}
 
-        let parsed = options.compactMap { option -> AgentModelOption? in
-            if let value = option.stringValue {
-                return AgentModelOption(id: value, displayName: value)
+/// ACP's current config-option selector and the older models selector.
+struct ACPModelSelection: Sendable {
+    let configID: String?
+    let currentModel: String?
+    let options: [AgentModelOption]
+
+    static func parse(_ result: JSONValue) -> Self? {
+        for config in result["configOptions"]?.arrayValue ?? [] {
+            guard config["category"]?.stringValue == "model",
+                  config["type"]?.stringValue == "select",
+                  let id = config["id"]?.stringValue else { continue }
+            let options = (config["options"]?.arrayValue ?? []).flatMap { entry in
+                (entry["options"]?.arrayValue ?? [entry]).compactMap { value -> AgentModelOption? in
+                    guard let id = value["value"]?.stringValue, !id.isEmpty else { return nil }
+                    return AgentModelOption(id: id, displayName: value["name"]?.stringValue ?? id,
+                        modelDescription: value["description"]?.stringValue)
+                }
             }
-            guard let id = option["value"]?.stringValue ?? option["id"]?.stringValue else {
-                return nil
-            }
-            return AgentModelOption(
-                id: id,
-                displayName: option["name"]?.stringValue ?? id,
-                modelDescription: option["description"]?.stringValue
-            )
+            return Self(configID: id, currentModel: config["currentValue"]?.stringValue, options: unique(options))
         }
-        return parsed.isEmpty ? nil : parsed
+        guard let models = result["models"], let available = models["availableModels"]?.arrayValue else { return nil }
+        let options = available.compactMap { value -> AgentModelOption? in
+            guard let id = value["modelId"]?.stringValue, !id.isEmpty else { return nil }
+            return AgentModelOption(id: id, displayName: value["name"]?.stringValue ?? id,
+                modelDescription: value["description"]?.stringValue)
+        }
+        return Self(configID: nil, currentModel: models["currentModelId"]?.stringValue, options: unique(options))
+    }
+
+    private static func unique(_ options: [AgentModelOption]) -> [AgentModelOption] {
+        var seen = Set<String>()
+        return options.filter { seen.insert($0.id).inserted }
     }
 }
 #endif

@@ -683,12 +683,13 @@ struct ACPRuntimeTests {
     @Test("Model options are parsed from config options")
     func modelOptions() {
         let result = JSONValue.object(["configOptions": .array([
-            .object([
-                "value": .string("sonnet"),
-                "name": .string("Sonnet"),
-                "description": .string("Balanced"),
-            ]),
-            .object(["value": .string("opus"), "name": .string("Opus")]),
+            .object(["id": .string("model"), "category": .string("model"), "type": .string("select"),
+                "options": .array([
+                    .object(["group": .string("provider"), "options": .array([
+                        .object(["value": .string("sonnet"), "name": .string("Sonnet"), "description": .string("Balanced")]),
+                        .object(["value": .string("opus"), "name": .string("Opus")])
+                    ])])
+                ])])
         ])])
 
         let options = try! #require(ACPRuntime.modelOptions(from: result))
