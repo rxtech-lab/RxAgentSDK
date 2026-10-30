@@ -95,7 +95,7 @@ public struct HarnessPermissionRuleset: Sendable, Codable, Hashable {
     public mutating func append(_ rule: HarnessPermissionRule) { rules.append(rule) }
 
     static func expandHome(_ pattern: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = NSHomeDirectory()
         if pattern == "~" || pattern == "$HOME" { return home }
         if pattern.hasPrefix("~/") { return home + pattern.dropFirst(1) }
         if pattern.hasPrefix("$HOME/") { return home + pattern.dropFirst(5) }

@@ -213,14 +213,17 @@ public actor HarnessTerminalManager {
 
     // MARK: Process plumbing
 
-    #if os(macOS)
     private struct BackgroundJob {
         var shell: HarnessBackgroundShell
+        #if os(macOS)
         let process: Process
+        #endif
         let collector: OutputCollector
         let pump: Task<Void, Never>
         var readOffset = 0
     }
+
+    #if os(macOS)
 
     private func makeProcess(_ command: String, workingDirectory: URL) async throws -> Process {
         var isDirectory: ObjCBool = false
