@@ -608,6 +608,49 @@ them internally and emits `toolCallInput` exactly once, complete. `TranscriptRed
 folds events into `[AgentMessage]`. Both are pure value types — testable from a literal
 array of events, with no process and no UI.
 
+## Harness
+
+`RxAgentHarness` is a coding agent that runs **in this process** against any
+OpenAI-compatible `/chat/completions` endpoint — llama.cpp's `llama-server`, Ollama,
+LM Studio, vLLM, or a hosted API. Its tool surface, permission rules, compaction and
+system prompt follow [opencode](https://github.com/anomalyco/opencode).
+
+```swift
+let agent = HarnessAgent(configuration: HarnessConfiguration(
+    store: FileHarnessSessionStore(directory: sessionsURL)   // any HarnessSessionStore
+))
+let model = OpenAICompatibleHarnessModel(baseURL: URL(string: "http://127.0.0.1:8080/v1")!,
+                                         contextWindow: 32_768)
+let input = HarnessTurnInput(sessionID: "s1", prompt: "Fix the failing test",
+                             workingDirectory: repoURL, model: model, modelName: "qwen3",
+                             permissionHandler: myApprovalUI)
+
+for try await event in await agent.run(input) { … }    // streaming mode
+let result = try await agent.generate(input)            // generation mode
+```
+
+- **Tools**: `bash` (streams output, timeouts, `background: true` jobs with
+  `bash_output` / `bash_kill`), `read`, `write`, `edit`, `patch`, `glob`, `grep`,
+  `todowrite`, `webfetch`, `question`. Tools conform to `HarnessTool` and report
+  progress with `await context.emit(…)`, which arrives as `HarnessEvent.toolProgress`.
+- **Permissions**: `HarnessPermissionRuleset` — `allow` / `ask` / `deny` per permission
+  with wildcard patterns, last match wins (`bash: git * → allow`). Paths outside the
+  working directory raise `external_directory`; three identical calls raise `doom_loop`.
+  "Always" answers persist for the session. `PermissionMode` layers on top
+  (plan mode is read-only, bypass allows everything not explicitly denied).
+- **Compaction**: automatic once the prompt nears the context window — old tool
+  output is pruned first, then older turns are summarized with opencode's checkpoint
+  template. A server "context too long" error triggers the same and a retry.
+- **Usage**: `HarnessEvent.usage` streams estimated output tokens while the model
+  writes, then the server's measured numbers; `.contextWindow` tracks fullness.
+- **Sessions**: the harness owns no storage. Pass a `HarnessSessionStore`
+  (`FileHarnessSessionStore`, `InMemoryHarnessSessionStore`, or your own).
+- **AgentClient**: `HarnessAgentClient` wraps a `HarnessAgent` so hosts that drive
+  Claude Code, Codex and ACP through `AgentClient` get it with no new plumbing.
+
+Live tests against a real server:
+`RXAGENT_HARNESS_LIVE_URL=http://127.0.0.1:8080/v1 swift test --filter LiveHarness`.
+
 ## Package layout
 
 ```
@@ -617,6 +660,8 @@ RxAgentLLM        OpenAIChatClient, FoundationModelsClient, MCPHTTPClient, Agent
 RxAgentProcess    posix_spawn, NDJSON reader, JSONRPCConnection   (macOS)
 RxAgentBridge     LocalToolServer, ApprovalServer, MCP config      (macOS)
 RxAgentClients    ClaudeCodeClient, CodexClient, ACPClient          (macOS)
+RxAgentHarness    HarnessAgent: in-process coding agent, opencode-style tools, permissions,
+                  compaction, session storage; HarnessAgentClient adapts it to AgentClient
 RxAgentSessions   CLISessionStore
 AgentMarkdownUI · AgentMessageListUI · AgentChatUI
 ```
