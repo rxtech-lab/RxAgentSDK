@@ -38,6 +38,14 @@ let package = Package(
             dependencies: ["RxAgentCore", "RxAgentContext", "RxAgentProcess", "RxAgentBridge"]
         ),
 
+        // MARK: - In-process coding agent harness (opencode-style tools, permissions,
+        // compaction, pluggable session storage). Shell tools are macOS-only.
+
+        .target(
+            name: "RxAgentHarness",
+            dependencies: ["RxAgentCore", "RxAgentLLM", "RxAgentProcess"]
+        ),
+
         // MARK: - CLI transcript history (unguarded; simply finds nothing on iOS)
 
         .target(name: "RxAgentSessions", dependencies: ["RxAgentCore"]),
@@ -74,6 +82,7 @@ let package = Package(
                 "RxAgentProcess",
                 "RxAgentBridge",
                 "RxAgentClients",
+                "RxAgentHarness",
                 "RxAgentSessions",
                 "AgentMarkdownUI",
                 "AgentMessageListUI",
@@ -88,6 +97,7 @@ let package = Package(
         .testTarget(name: "RxAgentLLMTests", dependencies: ["RxAgentLLM"]),
         .testTarget(name: "RxAgentProcessTests", dependencies: ["RxAgentProcess"]),
         .testTarget(name: "RxAgentBridgeTests", dependencies: ["RxAgentBridge"]),
+        .testTarget(name: "RxAgentHarnessTests", dependencies: ["RxAgentHarness"]),
         .testTarget(name: "RxAgentSessionsTests", dependencies: ["RxAgentSessions"]),
         .testTarget(name: "RxAgentClientsTests", dependencies: ["RxAgentClients"]),
         .testTarget(name: "AgentMarkdownUITests", dependencies: ["AgentMarkdownUI"]),
