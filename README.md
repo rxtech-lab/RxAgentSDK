@@ -725,3 +725,7 @@ RXAGENT_LIVE_ACP=1 swift test # also runs an ACP agent over npx
 
 Live tests are opt-in because they need the binaries installed and spend tokens. The
 default suite is fixture-driven against recorded wire output.
+
+## visionOS
+
+The shared SDK supports visionOS 26. SwiftUI components use material backgrounds on visionOS while retaining Liquid Glass on iOS/macOS. Unsupported keyboard-dismiss behavior is excluded on visionOS. Validate spatial interaction and presentation on a headset before shipping.

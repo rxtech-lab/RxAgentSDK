@@ -50,7 +50,9 @@ final class MessageListCollectionView<Message: MessageListItem, RowContent: View
         alwaysBounceVertical = true
         showsVerticalScrollIndicator = false
         showsHorizontalScrollIndicator = false
+        #if !os(visionOS)
         keyboardDismissMode = .interactive
+        #endif
         delegate = self
         engine.surface = self
 

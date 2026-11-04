@@ -50,7 +50,11 @@ public struct AgentStreamingIndicator: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        #if os(visionOS)
+        .background(.regularMaterial, in: .capsule)
+        #else
         .glassEffect(.regular, in: .capsule)
+        #endif
         // Reduce Motion still gets the row — it just holds still, so the reader
         // keeps the "something is happening" signal without the pulse.
         .accessibilityHidden(true)
