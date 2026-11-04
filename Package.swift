@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "RxAgentSDK",
-    platforms: [.macOS(.v26), .iOS(.v26)],
+    platforms: [.macOS(.v26), .iOS(.v26), .visionOS(.v26)],
     products: [
         // One product. `import RxAgentSDK` re-exports every module, and the
         // individual modules (AgentMarkdownUI, AgentMessageListUI, …) remain

@@ -120,7 +120,11 @@ public struct AgentComposer<Accessories: View>: View {
             // carries on behind the field instead of stopping at its edge. No
             // tint over it — a fill heavy enough to be "on-theme" is heavy
             // enough to turn the glass back into a slab.
+            #if os(visionOS)
+            .background(.regularMaterial, in: fieldShape)
+            #else
             .glassEffect(.regular, in: fieldShape)
+            #endif
             .overlay {
                 fieldShape
                     .strokeBorder(borderColor, lineWidth: isDropTargeted ? 2 : 1)
@@ -353,7 +357,11 @@ public struct AgentComposer<Accessories: View>: View {
                     // cross-chip blending is: the container is opaque to
                     // ViewInspector, and the remove button inside it stops being
                     // reachable from the attachment tests.
+                    #if os(visionOS)
+                    .background(.regularMaterial, in: .capsule)
+                    #else
                     .glassEffect(.regular.tint(theme.toolChrome.opacity(0.8)), in: .capsule)
+                    #endif
                     .overlay {
                         Capsule().strokeBorder(theme.toolBorder, lineWidth: 1)
                     }
