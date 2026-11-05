@@ -17,6 +17,8 @@ let package = Package(
         // MARK: - Pure models & streaming reducers (all platforms)
 
         .target(name: "RxAgentCore"),
+        .target(name: "RxAgentVoice", dependencies: ["RxAgentCore"]),
+        .target(name: "AgentVoiceUI", dependencies: ["RxAgentVoice"]),
 
         // MARK: - Tool / context / skill DSL. The only target importing FoundationModels.
 
@@ -35,7 +37,7 @@ let package = Package(
         ),
         .target(
             name: "RxAgentClients",
-            dependencies: ["RxAgentCore", "RxAgentContext", "RxAgentProcess", "RxAgentBridge"]
+            dependencies: ["RxAgentCore", "RxAgentContext", "RxAgentProcess", "RxAgentBridge", "RxAgentVoice"]
         ),
 
         // MARK: - In-process coding agent harness (opencode-style tools, permissions,
@@ -84,6 +86,8 @@ let package = Package(
                 "RxAgentClients",
                 "RxAgentHarness",
                 "RxAgentSessions",
+                "RxAgentVoice",
+                "AgentVoiceUI",
                 "AgentMarkdownUI",
                 "AgentMessageListUI",
                 "AgentChatUI",
@@ -92,6 +96,7 @@ let package = Package(
 
         // MARK: - Tests
 
+        .testTarget(name: "RxAgentVoiceTests", dependencies: ["RxAgentVoice"]),
         .testTarget(name: "RxAgentCoreTests", dependencies: ["RxAgentCore"]),
         .testTarget(name: "RxAgentContextTests", dependencies: ["RxAgentContext"]),
         .testTarget(name: "RxAgentLLMTests", dependencies: ["RxAgentLLM"]),
