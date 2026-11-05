@@ -13,3 +13,7 @@
 @_exported import AgentChatUI
 @_exported import AgentMarkdownUI
 @_exported import AgentMessageListUI
+
+@_exported import RxAgentVoice
+
+@_exported import AgentVoiceUI
