@@ -62,7 +62,21 @@ public struct ClaudeCodeClient: AgentClient {
         return await ShellEnvironment.shared.findBinary(named: "claude")
     }
 
+    /// What the installed CLI reports for the user's account, or ``fallbackModels``
+    /// if it isn't installed or can't answer. May launch the CLI, which can take seconds.
     public func availableModels() async -> [AgentModelOption] {
+        guard let binary = await resolveBinary() else { return fallbackModels }
+        let environment = await ShellEnvironment.shared.environment(overrides: environmentOverrides)
+        let extraArguments = extraArguments
+        let key = "claude|\(binary)|\(extraArguments)|\(environmentOverrides.sorted { $0.key < $1.key })"
+        return await CLIModelCatalog.models(key: key, fallback: fallbackModels) {
+            try await ClaudeModelList.discover(binary: binary, extraArguments: extraArguments, environment: environment)
+        }
+    }
+
+    /// Recent models, for when the CLI can't be asked. They may not suit the user's
+    /// account. Kept current by `.github/scripts/update_claude_models.py`.
+    public var fallbackModels: [AgentModelOption] {
         [
             AgentModelOption(id: "claude-fable-5-1", displayName: "Fable 5.1"),
             AgentModelOption(id: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)"),

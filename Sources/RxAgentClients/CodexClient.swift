@@ -65,7 +65,21 @@ public struct CodexClient: AgentClient {
         return await ShellEnvironment.shared.findBinary(named: "codex")
     }
 
+    /// What the installed CLI reports for the user's account, or ``fallbackModels``
+    /// if it isn't installed or can't answer. May launch the CLI, which can take seconds.
     public func availableModels() async -> [AgentModelOption] {
+        guard let binary = await resolveBinary() else { return fallbackModels }
+        var environment = await ShellEnvironment.shared.environment()
+        environment.merge(environmentOverrides) { _, new in new }
+        let arguments = launchArguments()
+        let key = "codex|\(binary)|\(arguments)|\(environmentOverrides.sorted { $0.key < $1.key })"
+        return await CLIModelCatalog.models(key: key, fallback: fallbackModels) { [environment] in
+            try await CodexModelList.discover(binary: binary, arguments: arguments, environment: environment)
+        }
+    }
+
+    /// Models to offer when the CLI can't be asked. They may not suit the user's account.
+    public var fallbackModels: [AgentModelOption] {
         [
             AgentModelOption(id: "gpt-5-codex", displayName: "GPT-5 Codex"),
             AgentModelOption(id: "gpt-5", displayName: "GPT-5"),

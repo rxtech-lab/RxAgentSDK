@@ -246,6 +246,14 @@ OpenAIChatClient(configuration: .apiKey(
 ))
 ```
 
+`ClaudeCodeClient` and `CodexClient` ask the installed CLI for its models, so
+`availableModels()` reflects the user's own account and CLI version. No conversation
+starts and nothing counts against the user's limits, but the CLI does launch, which can
+take a few seconds; answers are kept for five minutes. If the CLI isn't installed or
+can't answer, you get `fallbackModels`, a fixed list that may not suit the account.
+A sandboxed app's children inherit its sandbox, so such an app should call this from
+wherever it already runs its agents.
+
 ACP clients apply `agent.model` (or `AgentSendRequest.model`) before each prompt,
 including turns that reuse a session. Model choices are discovered from the session's
 `configOptions` model selector, including grouped options, or legacy

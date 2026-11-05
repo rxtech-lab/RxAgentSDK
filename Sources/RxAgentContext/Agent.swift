@@ -172,11 +172,17 @@ public final class Agent {
         activeClientID = clientID
         model = nil
         effort = nil
+        // The last client's models mean nothing to this one, and finding its own can take seconds.
+        availableModels = []
         Task { await refreshClientOptions() }
     }
 
     public func refreshAvailableModels() async {
-        availableModels = await activeClient.availableModels()
+        let clientID = activeClientID
+        let models = await activeClient.availableModels()
+        // The user may have switched clients while this one was answering.
+        guard clientID == activeClientID else { return }
+        availableModels = models
     }
 
     public func refreshAvailableReasoningLevels() async {
@@ -189,8 +195,10 @@ public final class Agent {
 
     /// Both per-client option lists, for a view that has just appeared.
     public func refreshClientOptions() async {
-        await refreshAvailableModels()
+        // Together: a CLI listing its models mustn't hold up the levels, which are immediate.
+        async let models: Void = refreshAvailableModels()
         await refreshAvailableReasoningLevels()
+        await models
     }
 
     // MARK: Threads
