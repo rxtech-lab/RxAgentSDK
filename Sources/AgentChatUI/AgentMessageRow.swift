@@ -43,7 +43,8 @@ struct AgentMessageBubble: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 6) {
-                MarkdownView(text: message.plainText, style: theme.markdown)
+                // Hug the text so short messages get a short bubble; long ones still wrap at the row width.
+                MarkdownView(text: message.plainText, style: theme.markdown, expandsHorizontally: false)
                     .textSelection(.enabled)
                 if !message.attachments.isEmpty {
                     attachmentChips

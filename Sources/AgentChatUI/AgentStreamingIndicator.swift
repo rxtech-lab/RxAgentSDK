@@ -23,7 +23,7 @@ public struct AgentStreamingIndicator: View {
         HStack(spacing: 8) {
             if isStreaming { dots }
             if let tokens, tokens > 0 {
-                Text("\(tokens.formatted()) tokens")
+                Text("\(AgentTokenFormat.compact(tokens)) tokens")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(theme.secondaryText)
             }

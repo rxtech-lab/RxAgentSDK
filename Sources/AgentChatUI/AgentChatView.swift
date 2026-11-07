@@ -217,7 +217,7 @@ public struct AgentChatView<RowContent: View, Accessories: View>: View {
             AgentReasoningPicker(agent: agent)
 
             if let usage = agent.thread.usage {
-                Text("\(usage.inputTokens + usage.outputTokens) tokens")
+                Text("\(AgentTokenFormat.compact(usage.inputTokens + usage.outputTokens)) tokens")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(theme.secondaryText)
             }
