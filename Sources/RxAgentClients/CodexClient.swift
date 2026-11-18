@@ -179,18 +179,19 @@ public struct CodexClient: AgentClient {
                     "title": .string("RxAgentSDK"),
                     "version": .string("1.0.0"),
                 ]),
-                "capabilities": .object([:]),
+                "capabilities": .object(["experimentalApi": .bool(true)]),
             ]))
             try await connection.notify("initialized", params: .object([:]))
 
             // Resume the thread this client created earlier, or start a new one.
             let threadID: String
             if let resumeID = request.resumeSessionID {
-                let result = try await connection.request("thread/resume", params: .object([
-                    "threadId": .string(resumeID),
-                    "cwd": .string(request.workingDirectory.path),
-                ]))
+                let result = try await connection.request("thread/resume", params: resumeParams(request, threadID: resumeID))
                 threadID = Self.threadID(from: result) ?? resumeID
+                // Codex accepts resume developerInstructions but can omit them from
+                // the next model request (openai/codex#19045). Update both the native
+                // baseline above and the model-visible developer context below.
+                _ = try await connection.request("thread/inject_items", params: contextUpdateParams(request, threadID: threadID))
             } else {
                 let result = try await connection.request("thread/start", params: startParams(request))
                 threadID = Self.threadID(from: result) ?? UUID().uuidString
@@ -316,13 +317,40 @@ public struct CodexClient: AgentClient {
         return .object(params)
     }
 
+    /// Resume must refresh developer instructions at the same priority as thread/start.
+    /// Repeating context in the user prompt cannot override an older developer rule
+    /// (for example, a host that previously prohibited web research).
+    func resumeParams(_ request: AgentSendRequest, threadID: String) -> JSONValue {
+        var params = startParams(request).objectValue ?? [:]
+        params["threadId"] = .string(threadID)
+        // An empty context explicitly clears a previous host instruction.
+        if params["developerInstructions"] == nil {
+            params["developerInstructions"] = .string("")
+        }
+        return .object(params)
+    }
+
+    func contextUpdateParams(_ request: AgentSendRequest, threadID: String) -> JSONValue {
+        let context = resumeParams(request, threadID: threadID)["developerInstructions"]?.stringValue ?? ""
+        let text = "Current RxAgentSDK host context, replacing earlier RxAgentSDK host context for this conversation:\n\n"
+            + (context.isEmpty ? "The host has no additional instructions for this turn." : context)
+        return .object([
+            "threadId": .string(threadID),
+            "items": .array([.object([
+                "type": .string("message"),
+                "role": .string("developer"),
+                "content": .array([.object(["type": .string("input_text"), "text": .string(text)])]),
+            ])]),
+        ])
+    }
+
     func turnParams(_ request: AgentSendRequest, threadID: String) -> JSONValue {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
             "cwd": .string(request.workingDirectory.path),
             "input": .array([.object([
                 "type": .string("text"),
-                "text": .string(composePrompt(request)),
+                "text": .string(request.prompt),
             ])] + request.attachments.map { attachment in
                 switch attachment.kind {
                 case .image(let data, let mimeType):
@@ -339,17 +367,6 @@ public struct CodexClient: AgentClient {
         ]
         if let model = request.model { params["model"] = .string(model) }
         return .object(params)
-    }
-
-    /// On a resumed thread the developer instructions were set at `thread/start`,
-    /// so context has to travel with the prompt.
-    private func composePrompt(_ request: AgentSendRequest) -> String {
-        var parts: [String] = []
-        if request.resumeSessionID != nil, !request.contextText.isEmpty {
-            parts.append(request.contextText)
-        }
-        parts.append(request.prompt)
-        return parts.joined(separator: "\n\n")
     }
 
     private func effectiveApprovalPolicy(_ request: AgentSendRequest) -> CodexApprovalPolicy {
