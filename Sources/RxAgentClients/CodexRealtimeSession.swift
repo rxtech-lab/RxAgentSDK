@@ -13,6 +13,19 @@ public enum CodexRealtimeTransport: Sendable, Equatable {
     case webRTC(offer: String)
 }
 
+/// A role-bearing text item seeded into a realtime V3 session's history at startup.
+/// Unlike thread `developerInstructions`, which only reach the backing Codex model,
+/// these items are visible to the realtime model that actually speaks.
+public struct CodexRealtimeInitialItem: Sendable, Equatable {
+    public enum Role: String, Sendable { case user, developer, assistant }
+    public let role: Role
+    public let text: String
+    public init(role: Role, text: String) {
+        self.role = role
+        self.text = text
+    }
+}
+
 /// Persistent experimental Codex voice transport. The host owns audio capture/playback.
 /// Consume `events` once and always call `close()` when dismissing the voice UI.
 public actor CodexRealtimeSession {
@@ -97,6 +110,7 @@ extension CodexClient {
         workingDirectory: URL,
         resumeThreadID: String? = nil,
         instructions: String = "",
+        initialItems: [CodexRealtimeInitialItem] = [],
         voice: String? = nil,
         model: String? = nil,
         transport: CodexRealtimeTransport = .websocket,
@@ -132,21 +146,8 @@ extension CodexClient {
             guard let threadID = Self.threadID(from: result) else {
                 throw AgentError.protocolViolation("Missing realtime thread ID")
             }
-            var params: [String: JSONValue] = [
-                "threadId": .string(threadID), "outputModality": .string("audio"),
-            ]
-            switch transport {
-            case .websocket:
-                params["transport"] = .object(["type": .string("websocket")])
-            case .webRTC(let offer):
-                params["transport"] = .object(["type": .string("webrtc"), "sdp": .string(offer)])
-            }
-            // Codex defaults WebRTC to v1, which the backend rejects for lacking a quicksilver=v2 header.
-            if let version = version ?? (transport == .websocket ? nil : "v3") {
-                params["version"] = .string(version)
-            }
-            if let voice { params["voice"] = .string(voice) }
-            if let model { params["model"] = .string(model) }
+            let params = Self.realtimeStartParams(threadID: threadID, transport: transport, initialItems: initialItems,
+                                                  version: version, voice: voice, model: model)
             try await connection.request("thread/realtime/start", params: .object(params))
             let session = CodexRealtimeSession(threadID: threadID, process: process, connection: connection,
                                                events: events, continuation: continuation)
@@ -163,6 +164,35 @@ extension CodexClient {
             continuation.finish()
             throw error
         }
+    }
+
+    /// Builds `thread/realtime/start` params. Initial items require realtime V3, so they select V3
+    /// unless the caller pins a version.
+    static func realtimeStartParams(threadID: String, transport: CodexRealtimeTransport,
+                                    initialItems: [CodexRealtimeInitialItem] = [], version: String? = nil,
+                                    voice: String? = nil, model: String? = nil) -> [String: JSONValue] {
+        var params: [String: JSONValue] = [
+            "threadId": .string(threadID), "outputModality": .string("audio"),
+        ]
+        switch transport {
+        case .websocket:
+            params["transport"] = .object(["type": .string("websocket")])
+        case .webRTC(let offer):
+            params["transport"] = .object(["type": .string("webrtc"), "sdp": .string(offer)])
+        }
+        let items = initialItems.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        // Codex defaults WebRTC to v1, which the backend rejects for lacking a quicksilver=v2 header.
+        if let version = version ?? (transport == .websocket && items.isEmpty ? nil : "v3") {
+            params["version"] = .string(version)
+        }
+        if !items.isEmpty {
+            params["initialItems"] = .array(items.map {
+                .object(["role": .string($0.role.rawValue), "text": .string($0.text)])
+            })
+        }
+        if let voice { params["voice"] = .string(voice) }
+        if let model { params["model"] = .string(model) }
+        return params
     }
 }
 #endif
