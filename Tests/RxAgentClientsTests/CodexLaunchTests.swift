@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+import RxAgentCore
 @testable import RxAgentClients
 
 @Suite("Codex launch arguments")
@@ -19,6 +20,42 @@ struct CodexLaunchTests {
             "-c", "model_reasoning_effort=\"low\"",
         ])
         #expect(CodexClient().launchArguments() == ["app-server", "--listen", "stdio://"])
+    }
+
+    @Test("Resume replaces stale developer instructions with the current host policy")
+    func resumeRefreshesContext() {
+        let client = CodexClient()
+        let context = "Use lyric tools and native web search. Cite source URLs."
+        let request = AgentSendRequest(threadID: AgentThreadID(), resumeSessionID: "old-native-session",
+                                       prompt: "Search again", workingDirectory: URL(filePath: "/tmp/lyrics"),
+                                       contextText: context)
+        let params = client.resumeParams(request, threadID: "old-native-session")
+        #expect(params["threadId"]?.stringValue == "old-native-session")
+        #expect(params["cwd"]?.stringValue == "/tmp/lyrics")
+        #expect(params["developerInstructions"]?.stringValue == context)
+        #expect(params["sandbox"]?.stringValue == "workspace-write")
+        #expect(params["approvalPolicy"]?.stringValue == "untrusted")
+    }
+
+    @Test("Resumed context reaches the model as developer instructions, not user text")
+    func resumedContextPriority() throws {
+        let client = CodexClient()
+        let context = "Native web research is available."
+        let request = AgentSendRequest(threadID: AgentThreadID(), resumeSessionID: "old", prompt: "Search",
+                                       workingDirectory: URL(filePath: "/tmp"), contextText: context)
+        let params = client.contextUpdateParams(request, threadID: "old")
+        let item = try #require(params["items"]?.arrayValue?.first)
+        #expect(params["threadId"]?.stringValue == "old")
+        #expect(item["role"]?.stringValue == "developer")
+        #expect(item["content"]?.arrayValue?.first?["text"]?.stringValue?.hasSuffix(context) == true)
+        #expect(client.turnParams(request, threadID: "old")["input"]?.arrayValue?.first?["text"]?.stringValue == "Search")
+    }
+
+    @Test("Resume explicitly clears a removed host context")
+    func resumeClearsContext() {
+        let request = AgentSendRequest(threadID: AgentThreadID(), prompt: "Continue",
+                                       workingDirectory: URL(filePath: "/tmp"))
+        #expect(CodexClient().resumeParams(request, threadID: "old")["developerInstructions"]?.stringValue == "")
     }
 
     @Test("Loopback MCP traffic bypasses the system proxy")

@@ -61,6 +61,46 @@ struct LiveCodexTests {
         #expect(reducer.messages.contains { $0.plainText.lowercased().contains("pineapple") })
     }
 
+    @Test("Resumed chats can search after the host replaces an old no-tools policy", .timeLimit(.minutes(4)))
+    func resumedWebSearch() async throws {
+        let directory = try workspace()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = CodexClient(configOverrides: ["web_search=\"live\"", "model_reasoning_effort=\"low\""])
+        let thread = AgentThreadID()
+        var first = TranscriptReducer()
+        for await event in client.send(AgentSendRequest(
+            threadID: thread, prompt: "Reply with exactly: ready", workingDirectory: directory,
+            contextText: "You are a lyric assistant. Do not use any tools. Return only the requested output.",
+            permissions: DenyAllPermissions(), allowedTools: []
+        )) {
+            if case .failed(let error) = event { Issue.record("Initial turn failed: \(error)") }
+            _ = first.apply(event)
+        }
+        let nativeID = try #require(first.nativeSessionID)
+        var sawSearch = false, completed = false
+        var text = ""
+        for await event in client.send(AgentSendRequest(
+            threadID: thread, resumeSessionID: nativeID,
+            prompt: "Use live web search to find the latest Swift release announced on the official swift.org blog. Return its exact title, publication date and source URL. You must invoke web search, not answer from memory. Do not use shell or local files.",
+            workingDirectory: directory,
+            contextText: "Use native web search for current information. You must perform at least one web search before answering this research request. Cite source URLs. Never execute shell commands or modify files.",
+            permissions: DenyAllPermissions(), allowedTools: ["WebSearch", "WebFetch", "web_search"]
+        )) {
+            switch event {
+            case .toolCallStarted(_, let name):
+                if name == "webSearch" || name == "web_search" { sawSearch = true }
+                #expect(name != "Bash", "Search must use the hosted tool, not shell networking")
+            case .textDelta(let delta): text += delta
+            case .turnEnded(let result): completed = !result.isError
+            case .failed(let error): Issue.record("Search failed: \(error)")
+            default: break
+            }
+        }
+        #expect(sawSearch, "Must observe a real search call after replacing the old developer policy. Response: \(text)")
+        #expect(completed)
+        #expect(text.contains("https://"))
+    }
+
     @Test("Resuming continues the same Codex thread", .timeLimit(.minutes(4)))
     func resumesThread() async throws {
         let directory = try workspace()
