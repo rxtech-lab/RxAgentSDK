@@ -78,7 +78,7 @@ public struct ClaudeCodeClient: AgentClient {
     /// account. Kept current by `.github/scripts/update_claude_models.py`.
     public var fallbackModels: [AgentModelOption] {
         [
-            AgentModelOption(id: "claude-fable-5-1", displayName: "Fable 5.1"),
+            AgentModelOption(id: "claude-fable-5-2", displayName: "Fable 5.2"),
             AgentModelOption(id: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M)"),
             AgentModelOption(id: "claude-sonnet-5-5", displayName: "Sonnet 5.5"),
             AgentModelOption(id: "claude-haiku-5-5", displayName: "Haiku 5.5"),
